@@ -1,0 +1,506 @@
+{ GRB - Clip logger. DX11 build (GRB.exe) only. }
+
+[ENABLE]
+{$lua}
+if syntaxcheck then return "define(GRBCLIP,GRB.exe)" end
+local B = {
+  module = "GRB.exe", build = "DX11",
+  aob = "48 89 5C 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 30 45 0F B6 71 01 48 8B F1 45 0F B6 39 49 8B C8 4D 8B E9 4D 8B E0 E8 ?? ?? ?? ?? 49 8B CC 48 89 46 18 C7 46 20 00 00 00 00 E8",
+  ctrlVt = 0x4A29610, charVt = 0x4A303B8, holderVt = 0x4814C78, stateBase = 0x5B54A38,
+  callers = { [0x3453FD] = "clip", [0x33E99C] = "sync", [0x3B468C] = "layer",
+              [0x3B886C] = "layer", [0x3BE92B] = "layer", [0x7F9ACA] = "motion" },
+}
+local SITE = { 0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10 }
+local N, ESZ, RING, CAP = 4096, 0x40, 0x1000, 32 * 1024 * 1024
+local function say(s) print("GRB clip logger: " .. s) end
+local function hx(v) if v == nil then return "unreadable" end return string.format("%X", v) end
+
+if grbClipLog and grbClipLog.stop then pcall(grbClipLog.stop, "the entry was enabled again") end
+grbClipLog = nil
+
+local ok, base = pcall(getAddress, B.module)
+if not ok or not base or base == 0 then error("this script is for the " .. B.build .. " build: " .. B.module .. " is not the attached process") end
+local size = getModuleSize(B.module)
+local hits = {}
+local list = AOBScan(B.aob, "+X")
+if list then
+  for i = 0, list.Count - 1 do
+    local a = tonumber(list[i], 16)
+    if a >= base and a < base + size then hits[#hits + 1] = a end
+  end
+  list.destroy()
+end
+if #hits ~= 1 then error(string.format("the hook pattern: %d hits in %s, expected exactly 1 - not enabled", #hits, B.module)) end
+local hit = hits[1]
+local cur = readBytes(hit, #SITE, true)
+for i, v in ipairs(SITE) do
+  if not cur or cur[i] ~= v then error(string.format("%s+%X does not hold the expected bytes - not enabled", B.module, hit - base)) end
+end
+registerSymbol("GRBCLIP", hit, true)
+
+local L = { B = B, base = base, hit = hit, kind = {}, last = {}, lastMotion = {}, n = {
+  seen = 0, written = 0, repeats = 0, motion = 0, sync = 0, lost = 0, capped = 0 }, r = 0, bytes = 0 }
+
+for off, k in pairs(B.callers) do
+  local ret = base + off
+  local op = readBytes(ret - 5, 1, false)
+  local rel = readInteger(ret - 4, true)
+  if op == 0xE8 and rel and ret + rel == hit then L.kind[ret] = k
+  else say(string.format("the call before %s+%X does not reach the hook - its starts show as \"other\"", B.module, off)) end
+end
+
+local function refuse(s)
+  pcall(unregisterSymbol, "GRBCLIP")
+  error(s .. " - not enabled, nothing logged", 0)
+end
+
+-- the user's Documents folder as Windows reports it (also when it was moved)
+local function documents()
+  local okm, ms = pcall(createMemoryStream)
+  if not okm or not ms then return end
+  local s
+  pcall(function()
+    for _ = 1, 65 do ms.writeQword(0) end
+    local r = executeCodeLocalEx("shell32.SHGetSpecialFolderPathA", 0, ms.Memory, 5, 0)
+    if (r & 0xFFFFFFFF) ~= 0 then
+      ms.Position = 0
+      local t = ms.readString(520):match("^[^\0]+")
+      -- the folder must be there: its attributes, with the directory bit
+      local a = executeCodeLocalEx("kernel32.GetFileAttributesA", ms.Memory) & 0xFFFFFFFF
+      if a ~= 0xFFFFFFFF and (a & 0x10) ~= 0 then s = t end
+    end
+  end)
+  pcall(ms.destroy)
+  if not s or not (s:find("^%a:\\") or s:find("^\\\\")) then return end
+  return (s:gsub("\\+$", ""))
+end
+
+local function openLog()
+  local docs = documents()
+  if not docs then refuse("your Documents folder could not be had from Windows, or it is not there; the log goes only to \"GRB - Animation logging\" in it") end
+  local dir = docs .. "\\GRB - Animation logging"
+  local name = string.format("clips_%s_%s.csv", B.build, os.date("%Y-%m-%d_%H%M%S"))
+  local path = dir .. "\\" .. name
+  local k = 1
+  while fileExists(path) do
+    k = k + 1
+    path = dir .. "\\" .. name:gsub("%.csv$", "_" .. k .. ".csv")
+  end
+  local f = io.open(path, "wb")
+  if not f then
+    pcall(os.execute, 'mkdir "' .. dir .. '"')
+    f = io.open(path, "wb")
+  end
+  if not f then refuse("a log file could not be created in " .. dir .. "; the log goes only there") end
+  return f, path, dir
+end
+L.f, L.path, L.dir = openLog()
+
+local function q(b, o)
+  local v = 0
+  for i = 8, 1, -1 do v = (v << 8) | b[o + i] end
+  return v
+end
+
+function L.out(s, data)
+  if L.full then if data then L.n.capped = L.n.capped + 1 end return end
+  if L.bytes + #s > CAP then
+    L.full = true
+    L.f:write("# the file reached its size limit - from here on starts are counted, not written\n")
+    if data then L.n.capped = L.n.capped + 1 end
+    return
+  end
+  L.f:write(s)
+  L.bytes = L.bytes + #s
+end
+function L.note(s) L.out("# " .. s .. "\n") end
+function L.final(s) L.f:write("# " .. s .. "\n") end
+function L.mark(label)
+  if not L.mem then return end
+  pcall(L.drain)
+  local t = readQword(0x7FFE0014) or L.t0
+  local c = L.n
+  L.note(string.format("mark %s at %.3f s: %d starts read, %d written, %d repeats skipped, %d motion picks skipped, %d sync skipped; hook calls, all characters: %d",
+    tostring(label), (t - L.t0) / 1e7, c.seen, c.written, c.repeats, c.motion, c.sync, readQword(L.mem + 0x28) or 0))
+  L.f:flush()
+end
+
+function L.clock(t)
+  local lt = t - (L.bias or 0)
+  local s = lt // 10000000 - 11644473600
+  return os.date("!%Y-%m-%d %H:%M:%S", s) .. string.format(".%03d", (lt // 10000) % 1000)
+end
+
+function L.settings()
+  local m = L.mem
+  local all, win, mot = readInteger(m + 0x4) or 0, readInteger(m + 0x30) or 0, readInteger(m + 0x34) or 0
+  if L.set and L.set[1] == all and L.set[2] == win and L.set[3] == mot then return end
+  L.set = { all, win, mot }
+  local mtxt = ({ [0] = "a pick logged when its clip changes", [1] = "every pick logged", [2] = "picks not logged" })[mot] or ("value " .. mot)
+  local s = string.format("settings: %s; repeat window %d ms; motion matching: %s",
+    all ~= 0 and "all characters" or "the player only", win, mtxt)
+  L.note(s)
+  say(s)
+end
+
+function L.handle(t, clip, ent, entId, ret)
+  L.n.seen = L.n.seen + 1
+  local kind = L.kind[ret] or string.format("other %s+%X", B.module, ret - L.base)
+  if kind == "sync" then L.n.sync = L.n.sync + 1 return end
+  local win, mot = L.set[2], L.set[3]
+  if kind == "motion" then
+    if mot == 2 then L.n.motion = L.n.motion + 1 return end
+    if mot == 0 then
+      if L.lastMotion[ent] == clip then L.n.motion = L.n.motion + 1 return end
+      L.lastMotion[ent] = clip
+    end
+  end
+  if kind ~= "motion" then
+    local key = string.format("%X:%X", ent, clip)
+    local prev = L.last[key]
+    L.last[key] = t
+    if win > 0 and prev and t - prev < win * 10000 then L.n.repeats = L.n.repeats + 1 return end
+  end
+  local who = (ent ~= 0 and ent == L.player) and "player" or "other"
+  L.out(string.format("%s,%.3f,%s,%X,%016X,0x%016X,%s\n", L.clock(t), (t - L.t0) / 1e7, who, ent, entId, clip, kind), true)
+  L.n.written = L.n.written + 1
+end
+
+function L.drain()
+  local m = L.mem
+  local w = readQword(m + 0x10)
+  if not w then return end
+  local r, done = L.r, 0
+  while r < w and done < N do
+    local b = readBytes(m + RING + (r % N) * ESZ, ESZ, true)
+    if not b then break end
+    if q(b, 0) ~= r + 1 then
+      local now = getTickCount()
+      L.stuck = L.stuck or { r = r, since = now }
+      if L.stuck.r ~= r then L.stuck = { r = r, since = now } end
+      if now - L.stuck.since < 2000 then break end
+      L.n.lost = L.n.lost + 1
+      L.stuck = nil
+    else
+      L.handle(q(b, 8), q(b, 16), q(b, 24), q(b, 32), q(b, 40))
+    end
+    r, done = r + 1, done + 1
+  end
+  if r ~= L.r then L.r = r; writeQword(m + 0x18, r) end
+end
+
+function L.stateFlag(id)
+  local a = readPointer(L.base + B.stateBase)
+  if not a or a == 0 then return nil end
+  local b = readPointer(a + 0x08)
+  if not b or b == 0 then return nil end
+  local arr = readPointer(b)
+  if not arr or arr == 0 then return nil end
+  local e = readPointer(arr + id * 8)
+  if not e or e == 0 then return nil end
+  local fl = readPointer(e)
+  if not fl or fl == 0 then return nil end
+  return readBytes(fl + 0x08, 1, false)
+end
+
+function L.entityOf(c)
+  if readQword(c) ~= L.base + B.ctrlVt then return nil, string.format("%X no longer reads the controller's vtable", c) end
+  local ch = readQword(c + 0x08)
+  if not ch or ch == 0 or readQword(ch) ~= L.base + B.charVt then return nil, string.format("[%X+0x08] = %s, not a character", c, hx(ch)) end
+  local h = readQword(ch + 0x70)
+  if not h or h == 0 or readQword(h) ~= L.base + B.holderVt then return nil, string.format("[%X+0x70] = %s, not the holder", ch, hx(h)) end
+  local e = readQword(h + 0x10)
+  if not e or e == 0 then return nil, string.format("[%X+0x10] reads %s", h, hx(e)) end
+  return e
+end
+
+function L.setPlayer(e, why)
+  if e == L.player then return end
+  L.player = e
+  writeQword(L.mem + 0x8, e)
+  if e ~= 0 then L.note(string.format("the player's character: entity %X", e)); say(string.format("the player's character: entity %X", e))
+  else L.note("the player's character is not known: " .. why); say("the player's character is not known: " .. why) end
+end
+
+function L.startScan()
+  local ok, ms = pcall(createMemScan)
+  if not ok or not ms then return end
+  local scan = { ms = ms, t0 = getTickCount() }
+  ms.OnScanDone = function() scan.done = true end
+  ok = pcall(function()
+    ms.firstScan(soExactValue, vtQword, rtRounded, string.format("%X", L.base + B.ctrlVt), "", 0, 0x00007FFFFFFFFFFF,
+      "+W", fsmAligned, "8", true, false, false, false)
+  end)
+  if not ok then pcall(function() ms.destroy() end) return end
+  L.scan, L.lastScan = scan, scan.t0
+end
+
+function L.finishScan()
+  local scan = L.scan
+  if not scan.done and getTickCount() - scan.t0 < 60000 then return end
+  L.scan = nil
+  local addrs = {}
+  pcall(function()
+    scan.ms.waitTillDone()
+    local fl = createFoundList(scan.ms)
+    fl.initialize()
+    for i = 0, fl.Count - 1 do addrs[#addrs + 1] = getAddress(fl.getAddress(i)) end
+    fl.deinitialize()
+    fl.destroy()
+  end)
+  pcall(function() scan.ms.destroy() end)
+  if L.stopped then return end
+  local found = {}
+  for _, a in ipairs(addrs) do
+    if L.entityOf(a) then found[#found + 1] = a end
+  end
+  if #found == 1 then
+    L.ctrl = found[1]
+    L.setPlayer((L.entityOf(found[1])), "")
+  elseif #found ~= L.lastCount then
+    L.lastCount = #found
+    say(string.format("searching for the player: %d candidates, expected 1 - searching again", #found))
+  end
+end
+
+function L.playerCheck()
+  if L.scan then L.finishScan() return end
+  if L.ctrl then
+    local e, why = L.entityOf(L.ctrl)
+    if e then L.setPlayer(e, "") return end
+    L.ctrl = nil
+    L.setPlayer(0, why)
+  end
+  local s00 = L.stateFlag(0x00)
+  if s00 == 0 then return end
+  local every = s00 == 1 and 2000 or 10000
+  if L.lastScan and getTickCount() - L.lastScan < every then return end
+  L.startScan()
+end
+
+function L.status()
+  local d = readQword(L.mem + 0x20) or 0
+  if d ~= (L.drop or 0) then
+    L.drop = d
+    L.note(string.format("dropped so far: %d starts (the buffer was full)", d))
+  end
+  local now = getTickCount()
+  if now - (L.pruned or 0) > 10000 then
+    L.pruned = now
+    local t = readQword(0x7FFE0014) or 0
+    for k, v in pairs(L.last) do if t - v > 1200000000 then L.last[k] = nil end end
+  end
+end
+
+function L.tick()
+  if L.stopped then return end
+  if not L.mem then
+    local m = getAddressSafe("grbclipMem")
+    local op = readBytes(L.hit, 1, false)
+    local rel = readInteger(L.hit + 1, true)
+    if m and op == 0xE9 and rel and L.hit + 5 + rel == m + 0x100 then
+      L.mem = m
+      L.t0 = readQword(0x7FFE0014)
+      L.bias = readQword(0x7FFE0020) or 0
+      L.note(string.format("GRB Clip Logger, %s build (%s), started %s", B.build, B.module, L.clock(L.t0)))
+      L.settings()
+      L.out("time,seconds,character,entity,entity_id,clip_id,source\n")
+      L.note("the player's character: searching")
+      writeInteger(m, 1)
+      L.note("the log folder: " .. L.dir)
+      say("logging to " .. L.path)
+    else
+      L.waits = (L.waits or 0) + 1
+      if L.waits > 30 then L.stop("the hook was not applied") end
+      return
+    end
+  end
+  L.bias = readQword(0x7FFE0020) or L.bias
+  L.settings()
+  L.drain()
+  local now = getTickCount()
+  if now - (L.lastSlow or 0) >= 1000 then
+    L.lastSlow = now
+    L.playerCheck()
+    L.status()
+  end
+  L.f:flush()
+end
+
+function L.stop(why)
+  if L.stopped then return end
+  L.stopped = true
+  if L.timer then L.timer.destroy(); L.timer = nil end
+  if L.scan then
+    local ms = L.scan.ms
+    L.scan = nil
+    pcall(function() ms.destroy() end)
+  end
+  if L.mem then
+    writeInteger(L.mem, 0)
+    pcall(L.drain)
+    local c = L.n
+    L.final(string.format("stopped (%s): %d starts read, %d written, %d repeats within the window skipped, %d motion-matching picks skipped, %d sync steps skipped, %d not written past the size limit",
+      why, c.seen, c.written, c.repeats, c.motion, c.sync, c.capped))
+    L.final(string.format("dropped (the buffer was full): %d; lost (a slot never completed): %d; hook calls, all characters: %d",
+      readQword(L.mem + 0x20) or 0, c.lost, readQword(L.mem + 0x28) or 0))
+  else
+    L.final("not started: " .. why)
+  end
+  L.f:close()
+  say(string.format("stopped (%s); the log is %s", why, L.path))
+  if grbClipLog == L then grbClipLog = nil end
+end
+
+L.timer = createTimer(nil, false)
+L.timer.Interval = 100
+L.timer.OnTimer = function()
+  local ok2, err = pcall(L.tick)
+  if not ok2 then pcall(L.stop, "a Lua error: " .. tostring(err)) end
+end
+L.timer.Enabled = true
+grbClipLog = L
+{$asm}
+
+assert(GRBCLIP,48 89 5C 24 18 48 89 54 24 10)
+alloc(grbclipMem,$41000,GRBCLIP)
+label(grbclipOn)
+label(grbclipAll)
+label(grbclipPlayer)
+label(grbclipW)
+label(grbclipR)
+label(grbclipDrop)
+label(grbclipSeen)
+label(grbclipWindow)
+label(grbclipMotion)
+label(grbclipCode)
+label(grbclipEnt)
+label(grbclipTake)
+label(grbclipTry)
+label(grbclipNoId)
+label(grbclipFull)
+label(grbclipOut)
+label(grbclipSkip)
+label(grbclipRing)
+label(grbclipRet)
+registersymbol(grbclipMem)
+
+grbclipMem:
+grbclipOn:
+  dd 0
+grbclipAll:
+  dd 0
+grbclipPlayer:
+  dq 0
+grbclipW:
+  dq 0
+grbclipR:
+  dq 0
+grbclipDrop:
+  dq 0
+grbclipSeen:
+  dq 0
+grbclipWindow:
+  dd #1500
+grbclipMotion:
+  dd 0
+
+grbclipMem+100:
+grbclipCode:
+  cmp dword ptr [grbclipOn],0
+  je grbclipSkip
+  lock inc qword ptr [grbclipSeen]
+  push rbx
+  push rsi
+// the character: the entity behind the owner's handle
+  mov rax,[rdx]
+  mov r10,[rax]
+  xor r11d,r11d
+  test r10,r10
+  je grbclipEnt
+  test byte ptr [r10+0F],80
+  je grbclipEnt
+  mov r11,[r10]
+grbclipEnt:
+  cmp dword ptr [grbclipAll],0
+  jne grbclipTake
+  test r11,r11
+  je grbclipOut
+  cmp r11,[grbclipPlayer]
+  jne grbclipOut
+grbclipTake:
+  mov rax,[grbclipW]
+grbclipTry:
+  mov rbx,rax
+  sub rbx,[grbclipR]
+  cmp rbx,1000
+  jae grbclipFull
+  lea rbx,[rax+1]
+  lock cmpxchg qword ptr [grbclipW],rbx
+  jne grbclipTry
+  mov rsi,rax
+  and esi,FFF
+  shl rsi,6
+  lea rbx,[grbclipRing]
+  add rsi,rbx
+  mov rbx,7FFE0014
+  mov rbx,[rbx]
+  mov [rsi+08],rbx
+// the clip's record ID
+  mov rbx,[r8]
+  mov rbx,[rbx]
+  mov rbx,[rbx+10]
+  mov [rsi+10],rbx
+  mov [rsi+18],r11
+  xor ebx,ebx
+  test r10,r10
+  je grbclipNoId
+  mov rbx,[r10+10]
+grbclipNoId:
+  mov [rsi+20],rbx
+  mov rbx,[rsp+10]
+  mov [rsi+28],rbx
+  mov [rsi+30],rcx
+  lea rbx,[rax+1]
+  mov [rsi],rbx
+  jmp grbclipOut
+grbclipFull:
+  lock inc qword ptr [grbclipDrop]
+grbclipOut:
+  pop rsi
+  pop rbx
+grbclipSkip:
+  mov [rsp+18],rbx
+  jmp grbclipRet
+
+grbclipMem+1000:
+grbclipRing:
+
+GRBCLIP:
+  jmp grbclipCode
+grbclipRet:
+
+[DISABLE]
+{$lua}
+if syntaxcheck then return end
+local MODULE = "GRB.exe"
+local site, mem = getAddressSafe("GRBCLIP"), getAddressSafe("grbclipMem")
+local base = getAddressSafe(MODULE)
+local size = base and getModuleSize(MODULE)
+if not (site and base and size and site >= base and site < base + size) then
+  print("GRB clip logger: the hook site registered is not in " .. MODULE .. " - nothing written, nothing stopped")
+  return ""
+end
+local op = site and readBytes(site, 1, false)
+local rel = site and readInteger(site + 1, true)
+local ours = site and mem and op == 0xE9 and rel and site + 5 + rel == mem + 0x100
+if grbClipLog and grbClipLog.stop and grbClipLog.hit == site then
+  grbClipLog.stop(ours and "the entry was switched off" or "the entry was switched off; the game's code was not found as this entry left it")
+end
+local done = "unregistersymbol(grbclipMem)\r\nunregistersymbol(GRBCLIP)\r\n"
+if not ours then
+  print("GRB clip logger: the hook site does not hold this entry's jump - nothing written there")
+  return done
+end
+return "GRBCLIP:\r\n  db 48 89 5C 24 18\r\n" .. done
+{$asm}

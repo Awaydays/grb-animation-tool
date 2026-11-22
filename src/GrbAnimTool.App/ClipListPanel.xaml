@@ -1,0 +1,89 @@
+<UserControl x:Class="GrbAnimTool.App.ClipListPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:GrbAnimTool.App">
+    <UserControl.Resources>
+        <!-- the styles build on the theme's own (BasedOn), so the controls keep its look in light and dark -->
+        <Style x:Key="Label" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="Foreground" Value="{DynamicResource Grb.TextSecondary}" />
+            <Setter Property="Margin" Value="0,3,8,3" />
+        </Style>
+    </UserControl.Resources>
+    <!-- the clip list every screen shows the install's clips in: the search, the filters, the list with its columns, and the count -->
+    <DockPanel>
+        <Grid x:Name="FilterGrid" DockPanel.Dock="Top" Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Search" Style="{StaticResource Label}" VerticalAlignment="Center" />
+            <TextBox x:Name="SearchBox" Grid.Row="0" Grid.Column="1" TextChanged="OnSearchChanged" Margin="0,2"
+                     ToolTip="Words of a clip's name in any order, whole or in part, any case, small typos forgiven (hello emote, emo hel); once the clip index is ready, also of its readable name, its categories and what its name's abbreviations stand for (holstered walk, enemy death); or its ID in hex (start with 0x, or give eight or more hex digits). Best matches first; a click on a column header sorts by it, the third click goes back to best match first." />
+            <!-- the filters the panel's whole width, so a narrow panel still holds each box whole; each label stays with its boxes when
+                 the row wraps -->
+            <WrapPanel x:Name="FilterRow" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,2">
+                <ComboBox x:Name="StatusBox" Width="150" SelectionChanged="OnFilterChanged" Margin="0,0,6,2" ToolTip="Clip status against the game's own files">
+                    <ComboBoxItem Content="All statuses" IsSelected="True" />
+                    <ComboBoxItem Content="Vanilla" />
+                    <ComboBoxItem Content="Replaced" />
+                    <ComboBoxItem Content="Added" />
+                </ComboBox>
+                <ComboBox x:Name="FamilyBox" Width="150" SelectionChanged="OnFilterChanged" Margin="0,0,6,2"
+                          ToolTip="The first part of the clip's name (mca, mcm, nme, ...)" />
+                <StackPanel Orientation="Horizontal" Margin="0,0,6,0">
+                    <TextBlock Text="Length" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,4,0" />
+                    <!-- number boxes without the theme's clear button, which would cover what is typed in a box this narrow -->
+                    <local:NumberBox x:Name="MinBox" Width="64" TextChanged="OnLengthChanged" ToolTip="Shortest length in seconds (empty: no limit)" Margin="0,0,2,2" />
+                    <TextBlock Text="to" VerticalAlignment="Center" Margin="2,0" />
+                    <local:NumberBox x:Name="MaxBox" Width="64" TextChanged="OnLengthChanged" ToolTip="Longest length in seconds (empty: no limit)" Margin="2,0,2,2" />
+                    <TextBlock Text="s" VerticalAlignment="Center" Margin="2,0" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Who" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <ComboBox x:Name="WhoBox" Width="186" SelectionChanged="OnFilterChanged" Margin="0,0,6,2" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                              ToolTip="Who plays the clip, by the clip index (ready a moment after the game folder opens). Uncategorised: nothing places it. Goes with the What filter: Enemy and Death are the enemies' deaths." />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="What" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,4,0" />
+                    <ComboBox x:Name="WhatBox" Width="226" SelectionChanged="OnFilterChanged" Margin="0,0,6,2" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                              ToolTip="What the clip is, by the clip index (ready a moment after the game folder opens). Uncategorised: nothing places it." />
+                </StackPanel>
+                <!-- a screen's own switch for its fixed constraint (the Import screen's file length, the Edit screen's clips that allow an edit) -->
+                <ContentPresenter x:Name="ExtraFilterHost" VerticalAlignment="Center" Margin="0,0,6,2" />
+            </WrapPanel>
+        </Grid>
+        <TextBlock x:Name="CountText" DockPanel.Dock="Bottom" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,4,0,0" TextWrapping="Wrap" />
+        <!-- the bottom padding keeps the last row clear of the theme's horizontal scroll bar, which lies over the list's foot -->
+        <ListView x:Name="List" SelectionMode="Single" SelectionChanged="OnSelected" Padding="0,0,0,12"
+                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.IsDeferredScrollingEnabled="False"
+                  GridViewColumnHeader.Click="OnHeaderClick">
+            <ListView.View>
+                <!-- the clip index's columns (readable name, who, what) go in after the name: see IndexColumns; a screen's own column after them -->
+                <GridView>
+                    <GridViewColumn Width="{x:Static local:ClipListPanel.NameWidth}" DisplayMemberBinding="{Binding Name}">
+                        <GridViewColumnHeader Content="Name" Tag="Name" ToolTip="The clip's name in the game's files" />
+                    </GridViewColumn>
+                    <GridViewColumn Width="60" DisplayMemberBinding="{Binding Index}">
+                        <GridViewColumnHeader Content="Index" Tag="Index" ToolTip="The clip's record's place in the animation datafile" />
+                    </GridViewColumn>
+                    <GridViewColumn Width="65" DisplayMemberBinding="{Binding Duration, StringFormat=F3}">
+                        <GridViewColumnHeader Content="Length s" Tag="Length" />
+                    </GridViewColumn>
+                    <GridViewColumn Width="50" DisplayMemberBinding="{Binding LastTick}">
+                        <GridViewColumnHeader Content="Ticks" Tag="Ticks" />
+                    </GridViewColumn>
+                    <GridViewColumn Width="52" DisplayMemberBinding="{Binding TrackCount}">
+                        <GridViewColumnHeader Content="Tracks" Tag="Tracks" />
+                    </GridViewColumn>
+                    <GridViewColumn Width="72" DisplayMemberBinding="{Binding Status}">
+                        <GridViewColumnHeader Content="Status" Tag="Status" ToolTip="Vanilla: the game's own clip; Replaced: another clip is installed in its place; Added: not one of the game's clips" />
+                    </GridViewColumn>
+                </GridView>
+            </ListView.View>
+        </ListView>
+    </DockPanel>
+</UserControl>

@@ -1,0 +1,69 @@
+<Application x:Class="GrbAnimTool.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:checks="clr-namespace:GrbAnimTool.Core.Checks;assembly=GrbAnimTool.Core"
+             ShutdownMode="OnMainWindowClose">
+    <!-- the theme's own colours ("Grb." and a name) are put in here by Theme, the Fluent theme's by ThemeMode -->
+    <Application.Resources>
+        <!-- a check's badge: its level's colour behind its word; the outline is drawn under high contrast only (Theme) -->
+        <Style x:Key="Badge" TargetType="Border">
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="Padding" Value="4,1" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Grb.BadgeOutline}" />
+            <Setter Property="BorderThickness" Value="{DynamicResource Grb.BadgeOutlineWidth}" />
+            <Setter Property="Background" Value="{DynamicResource Grb.FailBadge}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Level}" Value="{x:Static checks:CheckLevel.Pass}">
+                    <Setter Property="Background" Value="{DynamicResource Grb.PassBadge}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Level}" Value="{x:Static checks:CheckLevel.Warn}">
+                    <Setter Property="Background" Value="{DynamicResource Grb.WarnBadge}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="BadgeWord" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Grb.BadgeText}" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <!-- a horizontal slider that can't be used (Theme puts it in for one): the theme's track, filled part and round thumb, of the
+             same sizes, in the palette's greyed colours -->
+        <ControlTemplate x:Key="Grb.DisabledSlider" TargetType="Slider">
+            <Grid MinHeight="32" Background="Transparent">
+                <Border Height="4" CornerRadius="2" Margin="10,0" VerticalAlignment="Center" Background="{DynamicResource Grb.DisabledTrack}" />
+                <Track x:Name="PART_Track">
+                    <Track.DecreaseRepeatButton>
+                        <RepeatButton Focusable="False" IsTabStop="False">
+                            <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton">
+                                    <Border Height="4" CornerRadius="2" Margin="10,0,-10,0" VerticalAlignment="Center" Background="{DynamicResource Grb.DisabledMark}" />
+                                </ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.DecreaseRepeatButton>
+                    <Track.IncreaseRepeatButton>
+                        <RepeatButton Focusable="False" IsTabStop="False">
+                            <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton">
+                                    <Border Background="Transparent" />
+                                </ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.IncreaseRepeatButton>
+                    <Track.Thumb>
+                        <Thumb Width="20" Height="20" Focusable="False">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="Thumb">
+                                    <Grid>
+                                        <Ellipse Fill="{DynamicResource Grb.Field}" Stroke="{DynamicResource Grb.DisabledTrack}" StrokeThickness="1" />
+                                        <Ellipse Width="10" Height="10" Fill="{DynamicResource Grb.DisabledMark}" />
+                                    </Grid>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+    </Application.Resources>
+</Application>

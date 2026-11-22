@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>GrbAnimTool.Cli</RootNamespace>
+    <AssemblyName>grbanim-cli</AssemblyName>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GrbAnimTool.Core\GrbAnimTool.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>GrbAnimTool.Core</RootNamespace>
+    <AssemblyName>GrbAnimTool.Core</AssemblyName>
+    <!-- Needed only by the Oodle loader, which calls the game's DLL through unmanaged function pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- SHA-256 of every vanilla clip record (hashes only), built by the harness's hash-table command. -->
+    <EmbeddedResource Include="Resources\vanilla-clips.txt" LogicalName="GrbAnimTool.Core.vanilla-clips.txt" Condition="Exists('Resources\vanilla-clips.txt')" />
+    <!-- The clip index: readable names, categories and the name-part glossary, keyed by clip ID. -->
+    <EmbeddedResource Include="Resources\clip-index.json" LogicalName="GrbAnimTool.Core.clip-index.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="GrbAnimTool.Tests" />
+  </ItemGroup>
+</Project>

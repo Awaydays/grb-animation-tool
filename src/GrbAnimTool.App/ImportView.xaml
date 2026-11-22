@@ -1,0 +1,188 @@
+<UserControl x:Class="GrbAnimTool.App.ImportView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:GrbAnimTool.App"
+             xmlns:index="clr-namespace:GrbAnimTool.Core.Index;assembly=GrbAnimTool.Core">
+    <UserControl.Resources>
+        <!-- the styles build on the theme's own (BasedOn), so the controls keep its look in light and dark -->
+        <Style x:Key="Label" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="Foreground" Value="{DynamicResource Grb.TextSecondary}" />
+            <Setter Property="Margin" Value="0,3,8,3" />
+        </Style>
+        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Margin" Value="0,0,6,0" />
+        </Style>
+    </UserControl.Resources>
+    <Grid Margin="6">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- the file to import -->
+        <Grid Grid.Row="0" Margin="0,0,0,6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="ChooseGlbButton" Grid.Column="0" Content="Choose .glb..." Click="OnChooseGlb" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                    ToolTip="A glTF binary made on the game's skeleton: the tool's own export of a clip (or of the skeleton), edited or animated in any tool that reads and writes glTF, and exported at 60 frames a second." />
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="4,0">
+                <TextBlock x:Name="GlbText" Text="Open your game folder on the Library screen first." TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="GlbInfo" Foreground="{DynamicResource Grb.TextSecondary}" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <StackPanel x:Name="BusyPanel" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
+                <ProgressBar IsIndeterminate="True" Width="140" Height="14" Margin="0,0,8,0" />
+                <TextBlock x:Name="BusyText" Text="Importing..." />
+            </StackPanel>
+        </Grid>
+
+        <Border x:Name="ErrorBox" Grid.Row="1" Background="{DynamicResource Grb.ErrorBack}" BorderBrush="{DynamicResource Grb.ErrorBorder}" BorderThickness="1" Padding="8,5" Margin="0,0,0,6"
+                Visibility="Collapsed">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="Dismiss" Click="OnDismissError" Margin="8,0,0,0" VerticalAlignment="Top" />
+                <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="{DynamicResource Grb.Error}" VerticalAlignment="Center" />
+            </DockPanel>
+        </Border>
+
+        <!-- the panes fill the window's height, and scroll in a window too short for their least height (every control reachable) -->
+        <local:FitScroll x:Name="PaneScroll" Grid.Row="2">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <!-- at the window's least size the clip panel and the viewer's least width end inside the window's edge -->
+                <ColumnDefinition Width="600*" MinWidth="280" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="470*" MinWidth="290" />
+                <ColumnDefinition Width="5" />
+                <ColumnDefinition Width="400*" MinWidth="220" />
+            </Grid.ColumnDefinitions>
+
+            <!-- the slot the file replaces -->
+            <DockPanel Grid.Column="0">
+                <TextBlock DockPanel.Dock="Top" Text="The clip it replaces" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,4" />
+                <!-- who plays the clip the file replaces ("probably" explained on hover), and, when that is more
+                     than one kind of character or none the tool can place, a notice that never stops the import -->
+                <StackPanel x:Name="UsersPanel" DockPanel.Dock="Bottom" Margin="0,4,0,0">
+                    <TextBlock x:Name="UsersText" TextWrapping="Wrap"
+                               ToolTip="{x:Static index:ClipUsers.PlayedByTip}" />
+                    <TextBlock x:Name="UsersNotice" Foreground="{DynamicResource Grb.Warning}" TextWrapping="Wrap" Visibility="Collapsed" />
+                </StackPanel>
+                <!-- the clip list every screen uses, held to the file's length while its switch (SameLengthBox) is on -->
+                <local:ClipListPanel x:Name="SlotPanel" />
+            </DockPanel>
+
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="{DynamicResource Grb.Splitter}" />
+
+            <!-- the game's clip and the import, side by side -->
+            <Grid x:Name="ViewerPane" Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <WrapPanel Grid.Row="0" Margin="0,0,0,4">
+                    <CheckBox x:Name="MoverBox" Content="Mover" IsChecked="True" Margin="0,3,12,3" Click="OnMoverToggled" Focusable="False"
+                              ToolTip="On: both clips travel and turn on their movers. Off: both play in place." />
+                    <CheckBox x:Name="FollowsEditBox" Content="Game's clip follows the import's progress" IsChecked="False" Margin="0,3,12,3" Click="OnFollowsEditToggled" Focusable="False"
+                              ToolTip="Off (the usual): the game's clip plays in real time at 1x and loops at its own length. On: it stands at the tick of the import shown, to compare poses at the same point of the move. An import is exactly its clip's length, so here both ways show the same tick. The same choice as the Edit screen's &quot;Original follows the edit's progress&quot;, remembered for the next run." />
+                    <ComboBox x:Name="LayoutBox" Width="130" Margin="0,0,12,0" VerticalAlignment="Center" SelectionChanged="OnLayoutChosen" Focusable="False" SelectedIndex="0"
+                              ToolTip="Overlay: the game's clip drawn pale behind the import, to see exactly which bones the import changed. Side by side: the two apart, never overlapping. The choice holds while the program runs.">
+                        <ComboBoxItem Content="Overlay" />
+                        <ComboBoxItem Content="Side by side" />
+                    </ComboBox>
+                    <Button Content="Reset camera" Click="OnResetCamera" Focusable="False" />
+                    <!-- the legend wraps in a viewer narrower than its line -->
+                    <TextBlock x:Name="LegendText" Text="Green: the import, as its record plays · pale, behind: the game's clip · red: where each head looks" Foreground="{DynamicResource Grb.TextSecondary}"
+                               VerticalAlignment="Center" TextWrapping="Wrap" />
+                </WrapPanel>
+                <Border x:Name="ViewFrame" Grid.Row="1" BorderBrush="{DynamicResource Grb.ViewBorder}" BorderThickness="1">
+                    <Grid>
+                        <Border x:Name="ViewSurface" Background="{DynamicResource Grb.ViewBack}" ClipToBounds="True" Focusable="True" FocusVisualStyle="{x:Null}">
+                            <Viewport3D x:Name="Viewport" IsHitTestVisible="False" ClipToBounds="True">
+                                <ModelVisual3D>
+                                    <ModelVisual3D.Content>
+                                        <Model3DGroup>
+                                            <AmbientLight Color="#FF505050" />
+                                            <DirectionalLight Color="#FFC8C8C8" Direction="-0.4,-0.6,-1" />
+                                            <DirectionalLight Color="#FF707070" Direction="0.5,0.7,-0.3" />
+                                        </Model3DGroup>
+                                    </ModelVisual3D.Content>
+                                </ModelVisual3D>
+                            </Viewport3D>
+                        </Border>
+                        <local:SketchLayer x:Name="Sketch" Visibility="Collapsed" />
+                        <TextBlock x:Name="OverlayText" Foreground="{DynamicResource Grb.ViewText}" Margin="10,8" VerticalAlignment="Top" HorizontalAlignment="Left"
+                                   IsHitTestVisible="False" FontFamily="Consolas" />
+                        <TextBlock x:Name="HintText" Foreground="{DynamicResource Grb.ViewHint}" FontSize="16" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                   IsHitTestVisible="False" TextWrapping="Wrap" TextAlignment="Center" Text="Choose a .glb and the clip it replaces." />
+                    </Grid>
+                </Border>
+                <!-- the play row with its slider the row's width, then the time and Loop on a row of their own, so neither is cut in a
+                     narrow viewer -->
+                <StackPanel Grid.Row="2" Margin="0,6,0,0">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                            <Button x:Name="StepBackButton" Content="◀|" Click="OnStepBack" ToolTip="One tick back (Left arrow)" Focusable="False" />
+                            <Button x:Name="PlayButton" Content="▶ Play" Width="80" Click="OnPlayPause" ToolTip="Play or pause (Space)" Focusable="False" />
+                            <Button x:Name="StepForwardButton" Content="|▶" Click="OnStepForward" ToolTip="One tick forward (Right arrow)" Focusable="False" />
+                        </StackPanel>
+                        <!-- no least width (the theme's 104 is more than a narrow viewer leaves it) -->
+                        <Slider x:Name="TimeSlider" Minimum="0" Maximum="1" VerticalAlignment="Center" Margin="4,0,8,0" MinWidth="0"
+                                ValueChanged="OnScrub" SmallChange="0.0166667" LargeChange="0.5" IsMoveToPointEnabled="True" Focusable="False" />
+                    </DockPanel>
+                    <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <TextBlock x:Name="TimeText" MinWidth="190" FontFamily="Consolas" VerticalAlignment="Center" Text="0.000 s  tick 0 / 0" />
+                        <CheckBox x:Name="LoopBox" Content="Loop" IsChecked="True" Margin="6,0,0,0" VerticalAlignment="Center" Click="OnLoopToggled" Focusable="False" />
+                    </WrapPanel>
+                </StackPanel>
+            </Grid>
+
+            <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" Background="{DynamicResource Grb.Splitter}" />
+
+            <!-- the checks and what to do with the result -->
+            <DockPanel Grid.Column="4" Margin="6,0,0,0">
+                <StackPanel x:Name="ChecksHead" DockPanel.Dock="Top">
+                    <TextBlock Text="Checks" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,4" />
+                    <TextBlock x:Name="VerdictText" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,4" Text="Nothing imported yet." />
+                </StackPanel>
+                <StackPanel x:Name="ActionPanel" DockPanel.Dock="Bottom" Margin="0,6,0,0">
+                    <!-- the step that puts the import in the package, in the theme's accent: the import itself runs as soon as the file and the clip are chosen -->
+                    <Button x:Name="KeepButton" Content="Add to package" IsEnabled="False" HorizontalAlignment="Stretch" Margin="0,0,0,4" Click="OnKeep"
+                            Style="{DynamicResource AccentButtonStyle}"
+                            ToolTipService.ShowOnDisabled="True" ToolTip="Adds the rebuilt clip to the package list (the Package screen writes it out; the list is kept between runs). An import added again for the same clip replaces the first." />
+                    <!-- an import made but not in the package: said until it is kept or another is made -->
+                    <TextBlock x:Name="NotKeptText" TextWrapping="Wrap" Foreground="{DynamicResource Grb.Warning}" Margin="0,0,0,4" Visibility="Collapsed"
+                               Text="Not in the package yet: press Add to package." />
+                    <Button x:Name="ExportButton" Content="Export record file..." IsEnabled="False" HorizontalAlignment="Stretch" Margin="0,0,0,4" Click="OnExport"
+                            ToolTipService.ShowOnDisabled="True" ToolTip="Writes the record file and its check report into a folder you pick (never a folder of the game's)." />
+                    <TextBlock x:Name="ExportWaitText" TextWrapping="Wrap" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,0,0,4" Visibility="Collapsed" />
+                    <TextBlock x:Name="KeepReasonText" TextWrapping="Wrap" Foreground="{DynamicResource Grb.Warning}" Margin="0,0,0,4" Visibility="Collapsed" />
+                    <CheckBox x:Name="ReplaceBox" Content="Replace files already there" Margin="0,0,0,4"
+                              ToolTip="Off: an export into a folder that already holds this record file or its report is refused and nothing is written. On: they are replaced." />
+                    <TextBlock x:Name="StatusText" TextWrapping="Wrap" Foreground="{DynamicResource Grb.Success}" Margin="0,2,0,0" />
+                    <TextBlock x:Name="PackageText" TextWrapping="Wrap" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,4,0,0" Text="In the package: none yet." />
+                </StackPanel>
+                <!-- the right padding keeps the checks' text clear of the theme's scroll bar, which lies over the list's right edge; the
+                     checks in the size of text they had before the theme -->
+                <ListBox x:Name="ReportList" ScrollViewer.HorizontalScrollBarVisibility="Disabled" BorderBrush="{DynamicResource Grb.ListBorder}" BorderThickness="1"
+                         Padding="0,0,10,0" FontSize="12">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <DockPanel Margin="0,2">
+                                <Border DockPanel.Dock="Left" Style="{StaticResource Badge}" Margin="0,0,6,0" VerticalAlignment="Top">
+                                    <TextBlock Text="{Binding Word}" Style="{StaticResource BadgeWord}" />
+                                </Border>
+                                <TextBlock TextWrapping="Wrap">
+                                    <Run Text="{Binding Check, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=": " /><Run Text="{Binding Text, Mode=OneWay}" />
+                                </TextBlock>
+                            </DockPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Grid>
+        </local:FitScroll>
+    </Grid>
+</UserControl>

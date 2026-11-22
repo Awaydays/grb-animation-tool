@@ -1,0 +1,212 @@
+{
+  "format": "grbanim-clip",
+  "formatVersion": 1,
+  "tool": "GRB Anim Tool",
+  "toolVersion": "golden",
+  "glb": "golden.glb",
+  "conventions": {
+    "framesPerSecond": 60,
+    "units": "metres",
+    "axes": "the game's model space: x the character's left-right (its left at -x), y forward, z up; the .glb holds every vector turned by (x, y, z) to (x, z, -y) for glTF's y up",
+    "armatureNode": "Armature",
+    "mover": "track 0, the root motion, is the armature node's own channels",
+    "keys": "the .glb: every tick from 0 to the last, LINEAR; this file: each track's own keys"
+  },
+  "clip": {
+    "id": "0x0000000000000079",
+    "name": "golden",
+    "index": 7,
+    "duration": 0.25,
+    "ticks": 15,
+    "status": "Added",
+    "recordBytes": 382,
+    "recordSha256": "537d1d131b210f70a204c74c4ae2a1793a45025b34df63bcec9c43505d1da131",
+    "word1": "11223344",
+    "word2": "55667788",
+    "trackListWord": "01020304",
+    "trackCount": 8
+  },
+  "tracks": [
+    {
+      "index": 0,
+      "hash": "00000000",
+      "name": "(mover)",
+      "kind": "Position",
+      "tag": 27,
+      "form": 9,
+      "keys": 2,
+      "carriedBy": "armature",
+      "node": "Armature"
+    },
+    {
+      "index": 1,
+      "hash": "00000000",
+      "name": "(mover)",
+      "kind": "Rotation",
+      "tag": 12,
+      "form": 4,
+      "keys": 2,
+      "carriedBy": "armature",
+      "node": "Armature"
+    },
+    {
+      "index": 2,
+      "hash": "530EC1CB",
+      "name": "Spine",
+      "kind": "Rotation",
+      "tag": 12,
+      "form": 4,
+      "keys": 2,
+      "carriedBy": "bone",
+      "node": "Spine"
+    },
+    {
+      "index": 3,
+      "hash": "6C8CB68C",
+      "kind": "Byte",
+      "tag": 39,
+      "form": 13,
+      "keys": 2,
+      "carriedBy": "sidecar"
+    },
+    {
+      "index": 4,
+      "hash": "0F208B89",
+      "kind": "Float",
+      "tag": 54,
+      "form": 18,
+      "keys": 2,
+      "carriedBy": "sidecar"
+    },
+    {
+      "index": 5,
+      "hash": "01020304",
+      "kind": "Byte",
+      "tag": 42,
+      "form": 14,
+      "keys": 2,
+      "carriedBy": "sidecar"
+    },
+    {
+      "index": 6,
+      "hash": "0A0B0C0D",
+      "kind": "Rotation",
+      "tag": 12,
+      "form": 4,
+      "keys": 2,
+      "carriedBy": "sidecar"
+    },
+    {
+      "index": 7,
+      "hash": "0A0B0C0E",
+      "kind": "Position",
+      "tag": 27,
+      "form": 9,
+      "keys": 1,
+      "carriedBy": "sidecar"
+    }
+  ],
+  "otherTracks": [
+    {
+      "index": 3,
+      "hash": "6C8CB68C",
+      "kind": "Byte",
+      "tag": 39,
+      "form": 13,
+      "ticks": [
+        0,
+        10
+      ],
+      "bytes": [
+        125,
+        0
+      ],
+      "curveHex": "2706000000020000000A7D00"
+    },
+    {
+      "index": 4,
+      "hash": "0F208B89",
+      "kind": "Float",
+      "tag": 54,
+      "form": 18,
+      "ticks": [
+        0,
+        15
+      ],
+      "floats": [
+        0.5,
+        -2
+      ],
+      "floatBits": [
+        "3F000000",
+        "C0000000"
+      ],
+      "curveHex": "360C000000020000000F0000003F000000C0"
+    },
+    {
+      "index": 5,
+      "hash": "01020304",
+      "kind": "Byte",
+      "tag": 42,
+      "form": 14,
+      "ticks": [
+        0,
+        5
+      ],
+      "raw": [
+        "0102",
+        "0304"
+      ],
+      "curveHex": "2A08000000020000000501020304"
+    },
+    {
+      "index": 6,
+      "hash": "0A0B0C0D",
+      "kind": "Rotation",
+      "tag": 12,
+      "form": 4,
+      "ticks": [
+        0,
+        15
+      ],
+      "rotations": [
+        [
+          0,
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "curveHex": "0C10000000020000000FFFBFFFBFFF3FFFBFFFBFFF3F"
+    },
+    {
+      "index": 7,
+      "hash": "0A0B0C0E",
+      "kind": "Position",
+      "tag": 27,
+      "form": 9,
+      "ticks": [
+        0
+      ],
+      "positions": [
+        [
+          0.25,
+          0.5,
+          1
+        ]
+      ],
+      "curveHex": "1B10000000010000000000803E0000003F0000803F"
+    }
+  ],
+  "events": {
+    "note": "objects found by their handle pattern before the track list; times in 1/120 s as stored",
+    "objects": [],
+    "groups": []
+  }
+}

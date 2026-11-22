@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>GrbAnimTool.App</RootNamespace>
+    <AssemblyName>GrbAnimTool</AssemblyName>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <!-- WPF's text layout needs real cultures (its font cache looks languages up by name). -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GrbAnimTool.Core\GrbAnimTool.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="GrbAnimTool.App.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,38 @@
+<Window x:Class="GrbAnimTool.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:GrbAnimTool.App"
+        Title="GRB Anim Tool" Width="1500" Height="900" MinWidth="860" MinHeight="520"
+        WindowStartupLocation="Manual" Background="{DynamicResource Grb.Surface}" Foreground="{DynamicResource Grb.Text}">
+    <Grid x:Name="Root" Background="{DynamicResource Grb.Surface}">
+        <TabControl x:Name="Tabs" Margin="4" SelectionChanged="OnTabChanged">
+            <TabItem Header="  Library  ">
+                <local:LibraryView x:Name="LibraryPage" />
+            </TabItem>
+            <TabItem Header="  Edit  ">
+                <local:EditView x:Name="EditPage" />
+            </TabItem>
+            <TabItem Header="  Import  ">
+                <local:ImportView x:Name="ImportPage" />
+            </TabItem>
+            <TabItem Header="  Package  ">
+                <local:PackageView x:Name="PackagePage" />
+            </TabItem>
+            <TabItem Header="  Log  ">
+                <local:LogView x:Name="LogPage" />
+            </TabItem>
+        </TabControl>
+        <!-- the settings, at the right of the screens' tabs, its word on the tabs' line: the theme's menu item holds its word 15 below
+             its top, the tabs' words sit 10 below the window's (the tab control's margin and the header's padding) -->
+        <Menu HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-5,10,0" Background="Transparent">
+            <MenuItem Header="_Settings">
+                <MenuItem Header="_Theme">
+                    <MenuItem x:Name="ThemeSystemItem" Header="Follow _Windows" IsCheckable="True" Click="OnThemeChosen"
+                              ToolTip="Light or dark as Windows' own app setting is, and changes with it." />
+                    <MenuItem x:Name="ThemeLightItem" Header="_Light" IsCheckable="True" Click="OnThemeChosen" />
+                    <MenuItem x:Name="ThemeDarkItem" Header="_Dark" IsCheckable="True" Click="OnThemeChosen" />
+                </MenuItem>
+            </MenuItem>
+        </Menu>
+    </Grid>
+</Window>

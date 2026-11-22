@@ -1,0 +1,20 @@
+{
+  "about": "A small list for the tests: every form the reader takes or leaves out.",
+  "format": 1,
+  "glossary": [
+    { "abbr": "swm", "meaning": "swimming", "sure": true, "note": "a short head: read as the name's own word" },
+    { "abbr": "regular", "meaning": "in hits, a light hit; in deaths, the plain kind", "search": "light hit", "sure": true, "note": "a long head: not read; its own search words" },
+    { "abbr": "tm8", "meaning": "AI teammates", "search": ["teammates"], "sure": true, "note": "search words that aren't a text: left out" },
+    { "abbr": "zzz", "meaning": "a death", "sure": false, "note": "unsure: left out" },
+    { "abbr": "qqq", "meaning": "a death", "note": "no sure: unsure" },
+    { "abbr": "two words", "meaning": "not one word", "sure": true }
+  ],
+  "clips": [
+    { "id": "0x0000000000000001", "name": "First clip", "who": ["Player"], "what": ["Emote"], "sure": true },
+    { "id": "0x0000000000000002", "name": "Second clip", "what": ["Death", "Hit reaction"], "sure": true, "note": "no who" },
+    { "id": "0x0000000000000003", "name": "Unsure clip", "who": ["Enemy"], "sure": false },
+    { "id": "0x0000000000000004", "who": ["Pilot", "NPC", "Uncategorised"], "what": ["Swimming"], "sure": true },
+    { "id": "0x0000000000000001", "name": "Twice", "sure": true },
+    { "id": "0x12", "name": "Bad ID", "sure": true }
+  ]
+}

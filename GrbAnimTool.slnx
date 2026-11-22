@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GrbAnimTool.Core/GrbAnimTool.Core.csproj" />
+    <Project Path="src/GrbAnimTool.Cli/GrbAnimTool.Cli.csproj" />
+    <Project Path="src/GrbAnimTool.App/GrbAnimTool.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GrbAnimTool.Tests/GrbAnimTool.Tests.csproj" />
+    <Project Path="tests/GrbAnimTool.App.Tests/GrbAnimTool.App.Tests.csproj" />
+  </Folder>
+</Solution>
