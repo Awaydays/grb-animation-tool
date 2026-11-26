@@ -92,7 +92,7 @@ public partial class App : Application
                     try { Box(m); return; }
                     catch (Exception) { }
                 if (automated) ErrorOut.WriteLine("error: " + m);
-                else MessageBox.Show(m, "GRB Anim Tool", MessageBoxButton.OK, MessageBoxImage.Error);
+                else MessageBox.Show(m, Core.Export.ToolInfo.Name,MessageBoxButton.OK, MessageBoxImage.Error);
             },
             // a run with no command line is a person's: an error in reading it (a fault, there being none to read) is logged
             LogPath = automated ? null : ErrorReport.DefaultLogPath,

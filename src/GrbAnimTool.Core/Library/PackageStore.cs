@@ -60,7 +60,7 @@ public sealed class PackageStore(string folder)
         ChangeKind.Trim => new(c.Kind.ToString(), From: c.From, To: c.To, TicksPerSecond: c.TicksPerSecond),
         ChangeKind.Swap => new(c.Kind.ToString(), SourceClip: c.SourceClip),
         ChangeKind.Import => new(c.Kind.ToString(), Glb: c.GlbPath),
-        ChangeKind.Text => new(c.Kind.ToString(), Text: c.Text),
+        ChangeKind.Text or ChangeKind.Replace => new(c.Kind.ToString(), Text: c.Text),
         _ => new(c.Kind.ToString()),
     };
 
@@ -75,6 +75,7 @@ public sealed class PackageStore(string folder)
             ChangeKind.Trim => k is { From: int a and >= 0, To: int b, TicksPerSecond: int r and > 0 } && b > a ? ClipChange.Trim(a, b) with { TicksPerSecond = r } : null,
             ChangeKind.Swap => ClipChange.Swap(k.SourceClip),
             ChangeKind.Import => k.Glb is { } glb ? ClipChange.Imported(glb) : null,
+            ChangeKind.Replace => k.Text is { } r ? ClipChange.Replaced(r) : null,
             _ => k.Text is { } t ? new ClipChange { Kind = ChangeKind.Text, Text = t } : null,
         };
     }
@@ -95,9 +96,13 @@ public sealed class PackageStore(string folder)
     /// names is not read at all: <see cref="ItemsOf"/>.)</summary>
     static string? Misfit(GameInstall g, Item i, out ClipEntry? slot)
     {
-        slot = g.Clips.FirstOrDefault(x => x.Id == i.Id);
+        // the row it was kept from: a modded file's row has the file's number for its index
+        // after a repack that file's bytes are the forge's row, which keeps the file's number beside its own index
+        static bool At(ClipEntry x, Item i) => x.Index == i.Index || x.FileNumber == i.Index;
+        slot = g.Clips.FirstOrDefault(x => x.Id == i.Id && x.Index == i.Index && x.Name == i.Name)
+            ?? g.Clips.FirstOrDefault(x => x.Id == i.Id && At(x, i) && x.Name == i.Name) ?? g.Clips.FirstOrDefault(x => x.Id == i.Id);
         if (slot is null) return "these game files have no clip of its ID";
-        if (slot.Index != i.Index || slot.Name != i.Name) return $"these game files' clip of its ID is {slot.Index}_-_{slot.Name}, not {i.Index}_-_{i.Name}";
+        if (!At(slot, i) || slot.Name != i.Name) return $"these game files' clip of its ID is {slot.Index}_-_{slot.Name}, not {i.Index}_-_{i.Name}";
         try
         {
             var rebuilt = Writing.ClipRebuild.Rebuild(i.Record, g.SharedTable);

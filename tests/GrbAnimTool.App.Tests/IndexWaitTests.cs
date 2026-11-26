@@ -105,7 +105,7 @@ public sealed class IndexWaitTests
         Assert.Equal(Visibility.Collapsed, import.ExportWaitText.Visibility);
         Assert.Equal("IOException: the disk is full.", typeof(EditView).GetField("_indexError", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(w.EditPage));
         // the package: its record file, its original clips and its marker, no text; the export: the record file and its check report
-        Assert.Equal(new[] { PackageBuild.MarkerName, RecordFile.ClipFileName(hello.Index, hello.Name, hello.Id), PackageBuild.OriginalsFolderName }.Order(StringComparer.Ordinal), Names(packageFailed));
+        Assert.Equal(new[] { PackageBuild.MarkerName, RecordFile.ClipFileName(PackageBuild.PackageFileIndex, hello.Name, hello.Id), PackageBuild.OriginalsFolderName }.Order(StringComparer.Ordinal), Names(packageFailed));
         Assert.Equal(new[] { $"{idle.Index}_-_{idle.Name}.checks.txt", RecordFile.ClipFileName(idle.Index, idle.Name, idle.Id) }.Order(StringComparer.Ordinal), Names(exportFailed));
         // the first opening's background reads end before the second's start
         await Task.WhenAll(InstallWork.Graph(g), InstallWork.Swaps(g), InstallWork.Mirror(g), InstallWork.Marks(g, null).Done);

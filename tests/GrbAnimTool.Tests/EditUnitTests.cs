@@ -511,7 +511,7 @@ public sealed class EditUnitTests
         Assert.DoesNotContain(MirrorEdit.Apply(Parse(MirrorClip()), Ctx(Body(), Free(Id))).Warnings, w => w.Contains("IK offset"));
     }
 
-    /// <summary>The edits gate on the verdict's own answers: a clip only GR_Graph's list names, and a clip the read didn't look for, are
+    /// <summary>The edits go by the verdict's own answers: a clip only GR_Graph's list names, and a clip the read didn't look for, are
     /// refused by mirror, scale, trim and speed with the verdict's reason; a blend's child carries the verdict's warning once.</summary>
     [Fact]
     public void TheEditsUseTheVerdictsOwnAnswers()

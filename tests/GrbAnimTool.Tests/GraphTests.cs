@@ -336,7 +336,7 @@ public sealed class GraphUnitTests
         }
     }
 
-    /// <summary>On a graph that didn't read whole, a motion-field clip whose document failed reads "not found" but isn't known: every gate
+    /// <summary>On a graph that didn't read whole, a motion-field clip whose document failed reads "not found" but isn't known: every check
     /// on the motion field refuses or warns.</summary>
     [Fact]
     public void TheMotionFieldAnswerIsUnknownOnAnIncompleteGraph()
@@ -496,8 +496,8 @@ public sealed class GraphUnitTests
 public sealed class GraphTests(InstallFixture f)
 {
     static ClipGraph? _graph;
-    static readonly object Gate = new();
-    ClipGraph G { get { lock (Gate) return _graph ??= ClipGraph.Read(f.Install); } }
+    static readonly object ReadOnce = new();
+    ClipGraph G { get { lock (ReadOnce) return _graph ??= ClipGraph.Read(f.Install); } }
 
     const ulong Hub = 0x000001544EA94BB9, ArmedSprint = 0x0000014AB299308A, ArmedSlopes = 0x0000014AB299308B, DeathMachine = 0x000001A2B8D2752A;
 

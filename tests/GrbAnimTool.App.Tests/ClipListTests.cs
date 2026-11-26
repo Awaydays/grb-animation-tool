@@ -80,7 +80,9 @@ public class ClipListTests(Xunit.Abstractions.ITestOutputHelper output)
                     // the readable name, who and what cells filled in from the index
                     Assert.Contains(All<TextBlock>(panel.List), t => t.Text == "Holstered walk, standing");
                 }
-                // the same widths everywhere
+                // the same widths everywhere, but the readable name's on the Library, which has no column of its own beside it
+                Assert.Equal(ClipListPanel.LibraryReadableWidth, library.ClipPanel.ReadableColumnWidth);
+                library.ClipPanel.ReadableColumnWidth = ClipListPanel.ReadableWidth;
                 var first = Columns(screens[0].Panel).Where(c => ClipListPanel.CommonColumns.Contains(c.Column) || ClipListPanel.OtherColumns.Contains(c.Column)).ToList();
                 foreach (var (name, _, panel) in screens.Skip(1))
                     Assert.Equal(first, Columns(panel).Where(c => first.Any(f => f.Column == c.Column)).ToList());

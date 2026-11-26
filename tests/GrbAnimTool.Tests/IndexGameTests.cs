@@ -12,10 +12,10 @@ public sealed class IndexGameTests(InstallFixture f)
 {
     static GraphFacts? _facts;
     static ClipIndex? _index;
-    static readonly object Gate = new();
+    static readonly object ReadOnce = new();
 
-    GraphFacts Facts { get { lock (Gate) return _facts ??= GraphFacts.Read(f.Install.Records, f.Install.Clips.Select(c => c.Id)); } }
-    ClipIndex X { get { lock (Gate) return _index ??= ClipIndex.Build(f.Install, Facts, ClipIndexList.Embedded()); } }
+    GraphFacts Facts { get { lock (ReadOnce) return _facts ??= GraphFacts.Read(f.Install.Records, f.Install.Clips.Select(c => c.Id)); } }
+    ClipIndex X { get { lock (ReadOnce) return _index ??= ClipIndex.Build(f.Install, Facts, ClipIndexList.Embedded()); } }
 
     const ulong GenericDeaths = 0x000001A2B8D2752A, TeammatesDeaths = 0x000001A2B8DBF324, Hub = 0x000001544EA94BB9, Emotes = 0x000001A62503D366,
         MenuLayer = 0x000001555E68546B;

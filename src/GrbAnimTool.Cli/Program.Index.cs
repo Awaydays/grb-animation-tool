@@ -34,7 +34,7 @@ static partial class Program
         }
         else
         {
-            var facts = GraphFacts.Read(g.Records, g.Clips.Select(c => c.Id));
+            var facts = GraphFacts.Read(g.Records, g.ForgeClips.Select(c => c.Id));
             Console.WriteLine($"graph read in {sw.Elapsed.TotalSeconds:F2} s");
             index = ClipIndex.Build(g, facts, ClipIndexList.Embedded(), IndexFingerprint.Of(g));
         }

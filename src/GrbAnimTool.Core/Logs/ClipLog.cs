@@ -50,6 +50,9 @@ public sealed class ClipLogLine
     /// <summary>Whether the ID was looked up (<see cref="ClipLog.Resolve"/>).</summary>
     public ClipLookup Lookup { get; set; }
 
+    /// <summary>For an ID not among the install's clips, its name in another datafile the tool read (<see cref="GameInstall.OtherClipNames"/>), or null.</summary>
+    public string? OtherName { get; set; }
+
     /// <summary>Whether a click on the line can show its clip: a start whose ID is one of the install's clips.</summary>
     public bool Opens => Kind == ClipLogKind.Start && Clip is not null;
 
@@ -65,7 +68,7 @@ public sealed class ClipLogLine
         ClipLogKind.Start => Lookup switch
         {
             ClipLookup.Found => Clip!.Name,
-            ClipLookup.NotFound => UnknownText,
+            ClipLookup.NotFound => OtherName is { } other ? $"{other} (another datafile)" : UnknownText,
             _ => "(no game folder open)",
         },
         _ => "",
@@ -88,7 +91,9 @@ public sealed class ClipLogLine
             + Lookup switch
             {
                 ClipLookup.Found => $"Clip {Clip!.Name} (record {Clip.Index} of the animation datafile). Click to show it in the Library.",
-                ClipLookup.NotFound => "Not one of the clips of the game folder open: the tool doesn't name it.",
+                ClipLookup.NotFound => OtherName is { } other
+                    ? $"Clip {other}, in another datafile than the animation one: the tool names it, but doesn't list or edit it."
+                    : "Not one of the clips of the game folder open: the tool doesn't name it.",
                 _ => "Open the game folder in the Library to name the clip.",
             },
         ClipLogKind.Unreadable => $"Line {Number} doesn't read: {Problem}. The line: {Text}",
@@ -249,9 +254,10 @@ public static class ClipLog
         foreach (var l in lines)
         {
             if (l.Kind != ClipLogKind.Start) continue;
-            if (install is null) { l.Clip = null; l.Lookup = ClipLookup.NotLooked; continue; }
+            if (install is null) { l.Clip = null; l.Lookup = ClipLookup.NotLooked; l.OtherName = null; continue; }
             l.Clip = install.FindClip(l.ClipId);
             l.Lookup = l.Clip is null ? ClipLookup.NotFound : ClipLookup.Found;
+            l.OtherName = l.Clip is null ? install.OtherClipNames.GetValueOrDefault(l.ClipId) : null;
         }
     }
 }

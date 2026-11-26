@@ -5,7 +5,7 @@ namespace GrbAnimTool.Core.Export;
 /// <summary>The tool's name and version as the exported files carry them.</summary>
 public static class ToolInfo
 {
-    public const string Name = "GRB Anim Tool";
+    public const string Name = "GRB Animation Tool";
 
     /// <summary>The core library's informational version, without any source revision suffix.</summary>
     public static string Version { get; } = ReadVersion();

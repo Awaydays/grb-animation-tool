@@ -150,14 +150,16 @@ public sealed class InstallEditChoices
 
     /// <summary>The clips worked out: one of each ID (two records of one ID are one clip to the install, the first found:
     /// <see cref="GameInstall.FindClip(ulong)"/>).</summary>
-    public static IReadOnlyList<ClipEntry> ClipsOf(GameInstall g) => g.Clips.DistinctBy(c => c.Id).ToList();
+    /// <para>Each row of a file of the unpacked folder that the forge doesn't hold is worked out too, by its own record (its
+    /// <see cref="ClipEntry.Key"/>).</para>
+    public static IReadOnlyList<ClipEntry> ClipsOf(GameInstall g) => [.. g.ForgeClips.DistinctBy(c => c.Id), .. g.Clips.Where(c => c.FromFile)];
 
     /// <summary>Choices already worked out, by clip ID.</summary>
     public static InstallEditChoices From(IReadOnlyDictionary<ulong, ClipEditChoices> of) => new(new Dictionary<ulong, ClipEditChoices>(of));
 
     public int Count => _of.Count;
 
-    public ClipEditChoices? For(ClipEntry c) => _of.GetValueOrDefault(c.Id);
+    public ClipEditChoices? For(ClipEntry c) => _of.GetValueOrDefault(c.Key);
 
     public IEnumerable<ClipEditChoices> All => _of.Values;
 
@@ -174,11 +176,11 @@ public sealed class InstallEditChoices
     /// hundredth, from the workers' threads). The work runs on the thread pool; the program's own background work uses
     /// <see cref="OfInBackground"/>.</summary>
     public static InstallEditChoices Of(GameInstall g, ClipGraph? graph, SwapSources? swaps, SkeletonMirror? mirror, CancellationToken cancel, int? parallelism = null,
-        bool full = false, IProgress<double>? progress = null)
+        bool full = false, IProgress<double>? progress = null, IReadOnlyList<ClipEntry>? only = null)
     {
         var of = new ConcurrentDictionary<ulong, ClipEditChoices>();
         var transient = new System.Runtime.CompilerServices.StrongBox<Exception?>();
-        var clips = ClipsOf(g);
+        var clips = only ?? ClipsOf(g);
         var one = Worker(g, clips.Count, graph, swaps, mirror, cancel, full, progress, of, transient);
         Parallel.ForEach(clips, new ParallelOptions { CancellationToken = cancel, MaxDegreeOfParallelism = Math.Max(1, parallelism ?? Environment.ProcessorCount - 1) }, one);
         return new InstallEditChoices(new Dictionary<ulong, ClipEditChoices>(of), transient.Value);
@@ -259,10 +261,10 @@ public sealed class InstallEditChoices
             try
             {
                 var ctx = new EditContext(g.Skeleton, g.SharedTable, graph?.Verdict(c.Id));
-                of[c.Id] = ChoicesForTests?.Invoke(g, c) ?? EditJobs.Choices(c, ctx, mirror, swaps?.For(c).Count ?? 0, cancel, full: full);
+                of[c.Key] = ChoicesForTests?.Invoke(g, c) ?? EditJobs.Choices(c, ctx, mirror, swaps?.For(c).Count ?? 0, cancel, full: full);
             }
             catch (Exception ex) when (EditJobs.Transient(ex)) { Interlocked.CompareExchange(ref transient.Value, ex, null); }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancel.IsCancellationRequested) { of[c.Id] = Failed(ex); }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancel.IsCancellationRequested) { of[c.Key] = Failed(ex); }
             int n = Interlocked.Increment(ref done);
             if (progress is not null && (n % step == 0 || n == total)) progress.Report((double)n / total);
         };

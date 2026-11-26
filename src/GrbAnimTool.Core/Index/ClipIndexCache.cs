@@ -95,7 +95,7 @@ public sealed class ClipIndexCache(string folder)
         var sw = Stopwatch.StartNew();
         var fp = IndexFingerprint.Of(g);
         string file = FileFor(g);
-        var clipIds = g.Clips.Select(c => c.Id).ToHashSet();
+        var clipIds = g.ForgeClips.Select(c => c.Id).ToHashSet();
         var outcome = CacheOutcome.Built;
         GraphFacts? facts = null;
         if (File.Exists(file))

@@ -72,7 +72,7 @@ public static class EditReasons
             EditRefusal.HandTracks => "this clip aims the hands at the weapon, and a mirror would leave them reaching to the old side",
             EditRefusal.TrackListsDiffer => "the two clips don't animate the same parts of the body, so one can't play in the other's place",
             EditRefusal.LengthsDiffer => "the two clips aren't the same length, so one can't play in the other's place",
-            EditRefusal.NoSwapSource => "no other clip in these game files has the same length and animates the same parts of the body, which a swap needs",
+            EditRefusal.NoSwapSource => "no other clip in these game files has the same length and animates the same parts of the body, which a swap needs; use Replace for any other clip",
             EditRefusal.NoRootMotion => "this clip doesn't travel, so there is no travel to scale",
             EditRefusal.Unpaired => "a part of the body this clip moves has no partner on the other side to take its mirrored motion",
             EditRefusal.ArenaKindMissing => $"{what} would need a kind of stored data this clip's file has no room for, and the tool can't add that room yet",

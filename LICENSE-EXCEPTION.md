@@ -1,9 +1,9 @@
 # Additional permission under GNU GPL version 3 section 7
 
-GRB Anim Tool
+GRB Animation Tool
 Copyright (C) 2026 Awaydays
 
-GRB Anim Tool is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
+GRB Animation Tool is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as
 published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See
 [LICENSE](LICENSE).
 

@@ -1,4 +1,4 @@
-// GRB Anim Tool. Copyright (C) 2026 Awaydays. Licensed under GPL-3.0-or-later (see LICENSE), with an additional permission under section 7 (see LICENSE-EXCEPTION.md).
+// GRB Animation Tool. Copyright (C) 2026 Awaydays. Licensed under GPL-3.0-or-later (see LICENSE), with an additional permission under section 7 (see LICENSE-EXCEPTION.md).
 using System.Runtime.InteropServices;
 using GrbAnimTool.Core.Hashing;
 
@@ -25,9 +25,9 @@ public sealed unsafe class OodleLibrary : IDisposable
 
     readonly IntPtr _lib;
     readonly delegate* unmanaged<byte*, long, byte*, long, int, int, int, void*, long, void*, void*, void*, long, int, long> _decompress;
-    // Decompress may run on several threads at once. Each call counts itself in under the gate; Dispose marks the library disposed, waits
+    // Decompress may run on several threads at once. Each call counts itself in under the lock; Dispose marks the library disposed, waits
     // until no call is in flight, and only then unloads the DLL, so a running call never loses the code it is executing.
-    readonly object _gate = new();
+    readonly object _sync = new();
     int _inFlight;
     bool _disposed;
 
@@ -93,7 +93,7 @@ public sealed unsafe class OodleLibrary : IDisposable
     /// <see cref="ObjectDisposedException"/> once <see cref="Dispose"/> has begun. Safe to call from several threads at once.</summary>
     public void Decompress(ReadOnlySpan<byte> comp, Span<byte> raw)
     {
-        lock (_gate)
+        lock (_sync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (comp.Length == 0) throw new InvalidDataException("empty compressed chunk");
@@ -113,7 +113,7 @@ public sealed unsafe class OodleLibrary : IDisposable
         finally
         {
             if (buf is not null) System.Buffers.ArrayPool<byte>.Shared.Return(buf);
-            lock (_gate) { if (--_inFlight == 0) Monitor.PulseAll(_gate); }
+            lock (_sync) { if (--_inFlight == 0) Monitor.PulseAll(_sync); }
         }
     }
 
@@ -121,11 +121,11 @@ public sealed unsafe class OodleLibrary : IDisposable
     /// <see cref="ObjectDisposedException"/>. Must not be called from inside a Decompress call.</summary>
     public void Dispose()
     {
-        lock (_gate)
+        lock (_sync)
         {
             if (_disposed) return;
             _disposed = true;
-            while (_inFlight > 0) Monitor.Wait(_gate);
+            while (_inFlight > 0) Monitor.Wait(_sync);
         }
         NativeLibrary.Free(_lib);
     }

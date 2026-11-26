@@ -141,8 +141,8 @@ public sealed class PackageBuiltTests
                 // the package folder as before: the record files, the original clips and the marker
                 string folder = Path.Combine(dir, PackageBuild.FolderNameFor("Built"));
                 Assert.True(File.Exists(Path.Combine(folder, PackageBuild.MarkerName)));
-                Assert.True(File.Exists(Path.Combine(folder, RecordFile.ClipFileName(hello.Index, hello.Name, hello.Id))));
-                Assert.True(File.Exists(Path.Combine(folder, RecordFile.ClipFileName(idle.Index, idle.Name, idle.Id))));
+                Assert.True(File.Exists(Path.Combine(folder, RecordFile.ClipFileName(PackageBuild.PackageFileIndex, hello.Name, hello.Id))));
+                Assert.True(File.Exists(Path.Combine(folder, RecordFile.ClipFileName(PackageBuild.PackageFileIndex, idle.Name, idle.Id))));
                 Assert.True(Directory.Exists(Path.Combine(folder, PackageBuild.OriginalsFolderName)));
                 // the list and the kept file empty at once
                 Assert.Empty(PackageList.Current.Items);

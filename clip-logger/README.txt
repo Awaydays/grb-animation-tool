@@ -1,14 +1,15 @@
-GRB Clip Logger
-===============
+GRB Clip Logger 1.0.7
+=====================
 
 An optional helper for Ghost Recon Breakpoint. It writes a log of which animation
 clips start playing on your character, with the time, so you can find the clip you
-just saw in game. The log gives each clip by its ID; GRB Anim Tool's Log screen
+just saw in game. The log gives each clip by its ID; GRB Animation Tool's Log screen
 looks the ID up in your own game files to show its name.
 
 It is a Cheat Engine table, checked with Cheat Engine 7.6. Nothing else is
-needed, and nothing of the game's files is changed. It is a separate, optional
-download: GRB Anim Tool works without it and without Cheat Engine.
+needed. The game's files on disk are never changed; while an entry is ticked,
+the logger does change the running game in memory (see Notes). It is a separate,
+optional download: GRB Animation Tool works without it and without Cheat Engine.
 
 
 Switching it on
@@ -37,6 +38,10 @@ Untick the entry. The game's code is put back as it was, and the log file is
 closed with a summary at its end. Each time you tick the entry a new log file is
 started.
 
+If the game closes, or Cheat Engine is attached to another process, the logger
+stops by itself and closes its log. To log again: start the game if it closed,
+attach Cheat Engine to it, then untick the entry and tick it again.
+
 
 Settings
 --------
@@ -45,12 +50,14 @@ change it; a change takes effect at once and is noted in the log. They go back t
 the defaults each time the entry is ticked.
 
   Characters                Player only (default), or All characters.
-  Repeat window (ms)        1500 by default. When the same clip starts again on
+  Repeat window (ms, 0 = off)
+                            1500 by default. When the same clip starts again on
                             the same character within this time (a looping clip,
                             for example), it is not logged again. 0 logs every start.
   Motion matching           Walking, running and sprinting are played by the
                             game's motion matching, which keeps jumping between
-                            frames of a set of clips. Default: a jump is logged only
+                            frames of a set of clips. Default ("Log a pick when
+                            its clip changes"): a jump (a "pick") is logged only
                             when it lands in a different clip than the last one.
                             "Log every pick" logs every jump; "Do not log picks"
                             leaves locomotion out. The repeat window does not
@@ -64,11 +71,12 @@ The log
 Folder: "GRB - Animation logging" in your Documents folder, for example
 C:\Users\<your name>\Documents\GRB - Animation logging. If your Documents folder
 has been moved (to another drive, or into OneDrive), the log goes there: the
-logger asks Windows where Documents is. The folder is made the first time you
-tick the entry. The log is written nowhere else: if the folder cannot be made
-or written to, the entry does not switch on, says why in one line, and logs
-nothing. Cheat Engine's Lua window prints the log's full path when logging
-starts. One file per session, named by build, date and time, for
+logger asks Windows where Documents is. If the path holds characters your
+Windows code page lacks, the entry does not switch on. The folder is made the
+first time you tick the entry. The log is written nowhere else: if the folder
+cannot be made or written to, the entry does not switch on, says why in one
+line, and logs nothing. Cheat Engine's Lua window prints the log's full path
+when logging starts. One file per session, named by build, date and time, for
 example clips_DX11_2026-11-18_213005.csv. It is written to disk several times a
 second, so little is lost if the game or Cheat Engine closes. A file stops growing
 at 32 MB (starts after that are counted in its summary).
@@ -89,18 +97,24 @@ The others are CSV with these columns:
                 where in the game's code the start came from (for example
                 other GRB.exe+41C2D0)
 
-The game's animation code gets no clip names from it (every clip reports the same
-placeholder name), so the log has IDs only.
+The game's animation code holds no clip names where the logger reads (every clip
+reports the same placeholder name), so the log has IDs only.
 
 
 Notes
 -----
 - The table is for the current PC version of the game. If a game update changes
   the code it looks for, the entry refuses to switch on and says why; nothing is
-  changed then.
+  changed then and no log is started.
 - One build's entry works only with that build's process.
-- Use it in single player. It only reads what the game is doing; it changes no
-  game behaviour.
+- While an entry is ticked, the logger changes the running game in memory: it
+  puts a small hook into the game's animation code and keeps a buffer in the
+  game's process. The game's files on disk are never changed, and unticking the
+  entry puts the code back. Each time the entry is ticked it takes about 260 KB
+  of the game's memory (the hook's code and its buffer), which stays until the
+  game closes. The hook only records; it changes nothing the game does.
+- Any tool that changes a running game can be taken for a cheat. Use it offline
+  or in single player only, and at your own risk.
 
 
 Licence

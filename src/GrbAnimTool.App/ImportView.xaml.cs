@@ -60,6 +60,7 @@ public partial class ImportView : UserControl
     public ImportView()
     {
         InitializeComponent();
+        MakeFitDelay();
         SlotPanel.Picked += OnSlotSelected;
         // the list with a few rows and who plays its clip, the viewer, and the checks with every button under them, in a window of any height
         PaneScroll.LeastHeight = () => Math.Max(Math.Max(30 + SlotPanel.LeastHeight + UsersPanel.DesiredSize.Height, LibraryView.LeastViewerHeight),
@@ -321,7 +322,9 @@ public partial class ImportView : UserControl
 
     /// <summary>Imports the chosen file into the chosen slot in the background and shows the result. Returns an error message (the
     /// refusal), or null.</summary>
-    public async Task<string?> RunAsync()
+    public Task<string?> RunAsync() => _lastRun = RunNowAsync();
+
+    async Task<string?> RunNowAsync()
     {
         if (_install is null || _glbPath is null || _slot is null) { ShowResult(); return "Choose a .glb and the clip it replaces."; }
         var g = _install;
@@ -342,7 +345,18 @@ public partial class ImportView : UserControl
         {
             // the install's graph as it is read now (read again after a retry on the Edit screen; nothing for an install no longer open)
             var graph = await InstallWork.Graph(g);
-            r = await Task.Run(() => ClipImport.Run(g, slot, path, graph));
+            var fit = FitNow(slot);
+            bool autoStart = CutStartBox.Text.Trim().Length == 0;
+            r = await Task.Run(() =>
+            {
+                // a cut with no start given: the start where the loop closes best, found on the file at its own length
+                if (fit is { Mode: FitMode.Cut } && autoStart && _glbTicks is double ft && ft > slot.LastTick)
+                {
+                    var whole = ClipImport.Run(g, slot, path, graph, fit with { Mode = FitMode.Hold, Loop = false });
+                    if (whole.Unfitted is { } u && ClipFit.SuggestCut(u, slot.LastTick) is int at) fit = fit with { CutStart = at };
+                }
+                return ClipImport.Run(g, slot, path, graph, fit);
+            });
         }
         catch (ImportRefusedException ex) { error = $"Not imported: {ex.Message}"; }
         // a file that can't be read, or data that isn't what it should be: said; any other error is the code's, below, and logged
@@ -418,8 +432,43 @@ public partial class ImportView : UserControl
     /// for the clip (an import of an unedited export, say, or of the builder's own clip on an install holding it), so it replaces nothing.</summary>
     string? Unchanged => _result is { } r && _install is { } g ? PackageEntries.Unchanged(g, r.Slot, r.Record) : null;
 
+    /// <summary>A fit option changed: the import made again with it, once typing in the start box pauses, so the result shown (and kept)
+    /// is always the one the options give.</summary>
+    void OnFitChanged(object sender, RoutedEventArgs e)
+    {
+        if (_fitDelay is null || FitRow.Visibility != Visibility.Visible) return;
+        _fitDelay.Stop();
+        _fitDelay.Start();
+    }
+
+    void OnFitTextChanged(object sender, TextChangedEventArgs e) => OnFitChanged(sender, e);
+
+    DispatcherTimer? _fitDelay;
+
+    /// <summary>Starts the fit options' re-run timer (made once the screen's controls are).</summary>
+    void MakeFitDelay()
+    {
+        _fitDelay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _fitDelay.Tick += (_, _) =>
+        {
+            _fitDelay.Stop();
+            if (_install is not null && _glbPath is not null && _slot is not null) Guarded(async () => await RunAsync(), "The import couldn't be made again");
+        };
+    }
+
+    /// <summary>The fit for a file of another length than <paramref name="slot"/> (as the Fit row stands), or null when the lengths are
+    /// equal or not known: the import's exact-length path, unchanged.</summary>
+    FitOptions? FitNow(ClipEntry slot)
+    {
+        if (_glbTicks is not double t || (int)Math.Round(t) == slot.LastTick) return null;
+        int.TryParse(CutStartBox.Text.Trim(), out int start);
+        var mode = StretchChoice.IsChecked == true ? FitMode.Speed : HoldChoice.IsChecked == true ? FitMode.Hold : FitMode.Cut;
+        return new FitOptions { Mode = mode, CutStart = Math.Max(0, start), Loop = LoopFitBox.IsChecked == true };
+    }
+
     void UpdateButtons()
     {
+        FitRow.Visibility = _slot is { } fs && _glbTicks is double ft && (int)Math.Round(ft) != fs.LastTick ? Visibility.Visible : Visibility.Collapsed;
         _keepTip ??= KeepButton.ToolTip;
         _exportTip ??= ExportButton.ToolTip;
         // an import that changes nothing is greyed with its reason: the game's own record is the game's file, never packaged
@@ -455,11 +504,32 @@ public partial class ImportView : UserControl
             : $"In the package ({items.Count}): " + string.Join(", ", items.Select(i => $"{i.Slot.Name} ({CheckResult.Word(i.Verdict)})"));
     }
 
-    void OnKeep(object sender, RoutedEventArgs e) => Keep();
-
-    /// <summary>Keeps the result for the package. Returns an error message, or null.</summary>
-    public string? Keep()
+    void OnKeep(object sender, RoutedEventArgs e) => Guarded(async () =>
     {
+        // the re-run made first may be refused (its reason is in the error box already); any other reason is said there too
+        if (await KeepAsync() is { } why && ErrorBox.Visibility != Visibility.Visible) ShowError(why);
+    }, "The clip couldn't be added");
+
+    /// <summary>A fit option changed and its re-run hasn't started yet: started now and awaited, so what is kept or exported is the
+    /// result the options give, not the one before.</summary>
+    async Task FlushFitAsync()
+    {
+        if (_fitDelay is { IsEnabled: true })
+        {
+            _fitDelay.Stop();
+            if (_install is not null && _glbPath is not null && _slot is not null) { await RunAsync(); return; }
+        }
+        // a re-run already going (it started while a folder was being chosen, say): its result, not none
+        if (_busy && _lastRun is { } run) await run;
+    }
+
+    /// <summary>The newest import run (<see cref="RunAsync"/>).</summary>
+    Task<string?>? _lastRun;
+
+    /// <summary>Keeps the result for the package, the fit options' pending re-run made first. Returns an error message, or null.</summary>
+    public async Task<string?> KeepAsync()
+    {
+        await FlushFitAsync();
         if (_result is null) return "Nothing imported to add.";
         if (Unchanged is { } same) return $"Not added: {_result.Slot.Name}: {same}.";
         bool replaced = PackageList.Current.Keep(_result);
@@ -493,6 +563,7 @@ public partial class ImportView : UserControl
     /// error message, or null.</summary>
     public async Task<string?> ExportAsync(string folder, bool overwrite, bool commandLine = false)
     {
+        await FlushFitAsync();
         if (_result is null || _install is null) return "Nothing imported to export.";
         if (_index is null && _indexError is null)
         {

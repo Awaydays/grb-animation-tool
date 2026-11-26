@@ -33,6 +33,27 @@ public sealed class ClipEntry
     public int LastTick => Record?.LastTick ?? 0;
     public int TrackCount => Record?.Tracks.Count ?? 0;
     public bool WalkedToEnd => Record?.WalkedToEnd ?? false;
+
+    /// <summary>The record file of the unpacked datafile folder this row stands for, or null (no unpacked folder, or no file holds it).</summary>
+    public string? FilePath { get; init; }
+    /// <summary>The number before <c>_-_</c> in <see cref="FilePath"/>'s name, or null when it has none (or there is no file).</summary>
+    public int? FileNumber { get; init; }
+    /// <summary>A row of a file whose record the forge's datafile doesn't hold: read from the file alone (<see cref="UnpackedFolder"/>).</summary>
+    public bool FromFile { get; init; }
+    /// <summary>The file replaces the game's own version: it is named <c>1_-_...</c>, or it is the first of two or more files of this ID.</summary>
+    public bool Modded { get; init; }
+    /// <summary>What else the list says of this row's file (its load order unknown, another clip's record), or null.</summary>
+    public string? Note { get; init; }
+    /// <summary>The numbers of the folder's other files holding exactly this row's bytes (the game's own file beside a 1_-_ copy of it).</summary>
+    public IReadOnlyList<int> SameFileNumbers { get; init; } = [];
+
+    readonly ulong _key;
+    /// <summary>The row's own key, for anything worked out per row: the clip's ID for a forge row, a key of its own for a
+    /// <see cref="FromFile"/> row (the top bit set, from the file's bytes), so two rows of one clip never share what was worked out.</summary>
+    public ulong Key { get => FromFile ? _key : Id; init => _key = value; }
+
+    /// <summary>The Status column's text: the status, with "modded" for a file that replaces the game's version.</summary>
+    public string StatusText => !Modded ? Status.ToString() : Status == ClipStatus.Vanilla ? "Modded (vanilla)" : "Modded";
 }
 
 /// <summary>How long each step of opening the install took.</summary>
@@ -68,7 +89,18 @@ public sealed class GameInstall : IDisposable
     public string RecordFolderName => $"{AnimationEntry.Index}_-_{AnimationEntry.Name}.data";
 
     public IReadOnlyList<DatafileRecord> Records { get; }
+    /// <summary>Every row the lists show: the forge's clips, and after each one the files of its ID in the unpacked folder that hold
+    /// something else (<see cref="ClipEntry.FromFile"/>), then files of IDs the forge lacks.</summary>
     public IReadOnlyList<ClipEntry> Clips { get; }
+    /// <summary>The clips of the forge's datafile alone, in its order: what the caches keyed by the forge are made of.</summary>
+    public IReadOnlyList<ClipEntry> ForgeClips { get; }
+    /// <summary>The unpacked datafile folder read (<see cref="UnpackedFolder"/>), or null when there is none.</summary>
+    public string? UnpackedFolderPath { get; private init; }
+    /// <summary>Why the unpacked folder beside the forge couldn't be read (its rows are then left out), or null.</summary>
+    public string? UnpackedFolderError { get; private init; }
+    /// <summary>The names of clips the tool read in another datafile than the animation one (the shared curve table's entry, which holds
+    /// some of the graph's clips), by ID: the Log screen names them, though they aren't rows of the lists.</summary>
+    public IReadOnlyDictionary<ulong, string> OtherClipNames { get; private init; } = new Dictionary<ulong, string>();
     public SharedCurveTable SharedTable { get; }
     public Skeleton BodySkeleton { get; }
     public Skeleton AddOnSkeleton { get; }
@@ -87,6 +119,7 @@ public sealed class GameInstall : IDisposable
         SharedCurveTable table, Skeleton body, Skeleton addOn, BoneNames names, VanillaClipHashes? vanilla, OpenTimings timings)
     {
         GameFolder = game; PatchForgePath = patch; BaseForgePath = baseForge; Oodle = oodle; AnimationEntry = animEntry; Records = records; Clips = clips;
+        ForgeClips = clips.Where(c => !c.FromFile).ToList();
         SharedTable = table; BodySkeleton = body; AddOnSkeleton = addOn; Skeleton = Skeleton.Merge(body, addOn); Names = names; Vanilla = vanilla; Timings = timings;
         foreach (var c in clips) _byId.TryAdd(c.Id, c);
         if (vanilla is not null) VanillaClipsMissing = vanilla.Ids.Count(id => !_byId.ContainsKey(id));
@@ -108,11 +141,14 @@ public sealed class GameInstall : IDisposable
 
     /// <summary>Opens the install in <paramref name="gameFolder"/>: its Oodle DLL (checked against the pins), its patch forge (or
     /// <paramref name="patchForge"/> instead, for tests and diagnostics) and its base forge, all read-only. Every failure comes out as a
-    /// <see cref="GameInstallException"/> naming what failed, or an <see cref="OodleException"/> for the library itself; nothing else.</summary>
-    public static GameInstall Open(string gameFolder, string? patchForge = null)
+    /// <see cref="GameInstallException"/> naming what failed, or an <see cref="OodleException"/> for the library itself; nothing else.
+    /// <para>The animation datafile's unpacked folder (<paramref name="unpackedFolder"/>; null: the one beside the patch forge, when there
+    /// is one; "": none) adds its files' rows (<see cref="UnpackedFolder"/>). A folder that can't be read leaves them out and says why
+    /// (<see cref="UnpackedFolderError"/>); it never fails the open.</para></summary>
+    public static GameInstall Open(string gameFolder, string? patchForge = null, string? unpackedFolder = null)
     {
         var at = new OpenStep();
-        try { return OpenSteps(gameFolder, patchForge, at); }
+        try { return OpenSteps(gameFolder, patchForge, unpackedFolder, at); }
         catch (Exception ex)
         {
             at.Oodle?.Dispose();
@@ -128,7 +164,7 @@ public sealed class GameInstall : IDisposable
         public OodleLibrary? Oodle;
     }
 
-    static GameInstall OpenSteps(string gameFolder, string? patchForge, OpenStep at)
+    static GameInstall OpenSteps(string gameFolder, string? patchForge, string? unpackedFolder, OpenStep at)
     {
         var total = Stopwatch.StartNew();
         if (!Directory.Exists(gameFolder)) throw new GameInstallException($"The game folder {gameFolder} doesn't exist.");
@@ -148,6 +184,7 @@ public sealed class GameInstall : IDisposable
 
         ForgeEntry animEntry; List<DatafileRecord> records; SharedCurveTable table; Skeleton body, addOn; byte[] bodyRec, addOnRec;
         string? controlOn;
+        var otherNames = new Dictionary<ulong, string>();
         TimeSpan tIndex, tAnim, tTable, tSkel;
         var names = BoneNames.Default();
         using (var fs = OpenForge(patch))
@@ -179,6 +216,7 @@ public sealed class GameInstall : IDisposable
                 controlOn = ControlDecode(oodle, bootPayload, $"entry 0x{SharedCurveTable.EntryId:X}") ? $"entry 0x{SharedCurveTable.EntryId:X}" : null;
             }
             var bootRecs = DecodeRecords(bootPayload, oodle, $"entry 0x{SharedCurveTable.EntryId:X} in {patch}");
+            foreach (var r in bootRecs) if (r.Type == ClipRecord.Type && r.Name.Length > 0) otherNames.TryAdd(r.Id, r.Name);
             var tableRec = bootRecs.FirstOrDefault(r => r.Id == SharedCurveTable.RecordId)
                 ?? throw new GameInstallException($"The shared curve table 0x{SharedCurveTable.RecordId:X} isn't in entry 0x{SharedCurveTable.EntryId:X}.");
             at.Step = $"Reading the shared curve table 0x{SharedCurveTable.RecordId:X} of entry 0x{SharedCurveTable.EntryId:X} in {patch}";
@@ -227,10 +265,22 @@ public sealed class GameInstall : IDisposable
                 Status = vanilla?.StatusOf(r.Id, own) ?? ClipStatus.Unknown,
             });
         }
+        at.Step = "Reading the unpacked animation datafile's folder";
+        string? unpacked = unpackedFolder is null ? UnpackedFolder.PathFor(patch, $"{animEntry.Index}_-_{animEntry.Name}.data") : unpackedFolder.Length == 0 ? null : unpackedFolder;
+        string? unpackedError = null;
+        if (unpacked is not null && Directory.Exists(unpacked))
+        {
+            try { clips = UnpackedFolder.Rows(unpacked, clips, vanilla); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            { unpackedError = $"The unpacked folder {unpacked} couldn't be read, so its files aren't listed: {ex.Message}"; }
+        }
+        else if (unpackedFolder is { Length: > 0 }) unpackedError = $"The unpacked folder {unpackedFolder} isn't there.";
+        if (unpacked is not null && !Directory.Exists(unpacked)) unpacked = null;
         var tClips = sw.Elapsed;
         return new GameInstall(gameFolder, patch, baseForge, oodle, animEntry, records, clips, table, body, addOn, names, vanilla,
             new OpenTimings(tOodle, tIndex, tAnim, tTable, tSkel, tClips, total.Elapsed))
         {
+            UnpackedFolderPath = unpackedError is null ? unpacked : null, UnpackedFolderError = unpackedError, OtherClipNames = otherNames,
             ControlDecodeOn = controlOn, BodySkeletonRecord = bodyRec, AddOnSkeletonRecord = addOnRec, PatchForgeStamp = patchStamp, BaseForgeStamp = baseStamp,
         };
     }
@@ -345,7 +395,7 @@ public sealed class GameInstall : IDisposable
     public void Dispose()
     {
         // let go under the same lock a hold is taken under, so no hold is taken between the check and the unloading
-        lock (_holdGate)
+        lock (_holdSync)
         {
             _disposeAsked = true;
             if (_holds > 0 || _disposed) return;
@@ -354,18 +404,18 @@ public sealed class GameInstall : IDisposable
         Unload();
     }
 
-    readonly object _holdGate = new();
+    readonly object _holdSync = new();
     int _holds;
     bool _disposeAsked, _disposed;
 
     /// <summary>Whether the install was let go (<see cref="Dispose"/>, and no hold left): its Oodle library unloaded.</summary>
-    public bool IsDisposed { get { lock (_holdGate) return _disposed; } }
+    public bool IsDisposed { get { lock (_holdSync) return _disposed; } }
 
     /// <summary>Keeps the install whole until the returned hold is disposed: a <see cref="Dispose"/> meanwhile (another install opened)
     /// returns at once, and the unloading is put off until the last hold is let go. Throws an <see cref="ObjectDisposedException"/> on an install already let go.</summary>
     public IDisposable Hold()
     {
-        lock (_holdGate)
+        lock (_holdSync)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _holds++;
@@ -381,7 +431,7 @@ public sealed class GameInstall : IDisposable
         {
             if (Interlocked.Exchange(ref _done, 1) != 0) return;
             bool now;
-            lock (g._holdGate)
+            lock (g._holdSync)
             {
                 now = --g._holds == 0 && g._disposeAsked && !g._disposed;
                 if (now) g._disposed = true;

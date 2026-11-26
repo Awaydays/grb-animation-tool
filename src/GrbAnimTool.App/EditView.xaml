@@ -2,7 +2,8 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:GrbAnimTool.App"
-             xmlns:index="clr-namespace:GrbAnimTool.Core.Index;assembly=GrbAnimTool.Core">
+             xmlns:index="clr-namespace:GrbAnimTool.Core.Index;assembly=GrbAnimTool.Core"
+             xmlns:lib="clr-namespace:GrbAnimTool.Core.Library;assembly=GrbAnimTool.Core">
     <UserControl.Resources>
         <!-- the styles build on the theme's own (BasedOn), so the controls keep its look in light and dark -->
         <Style x:Key="Label" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -241,8 +242,14 @@
                     <!-- the cut the handles give, tried in the background once they stop: a cut that can't be made says why -->
                     <TextBlock x:Name="TrimCheckText" Style="{StaticResource Reason}" Visibility="Collapsed" />
 
-                    <RadioButton x:Name="SwapChoice" Style="{StaticResource EditChoice}" Content="Swap" Checked="OnKindChosen" IsEnabled="False"
-                                 ToolTip="Plays another clip's motion in this clip's place. Only clips of the same length with the identical track list are offered." />
+                    <!-- trim and speed refused for the clip's timing data: what that means, and what still works -->
+                    <local:HelpButton x:Name="TimingHelp" Heading="Trim and Speed refused" Text="{x:Static lib:HelpTexts.TimingRefused}" HorizontalAlignment="Left" Margin="20,0,0,2" Visibility="Collapsed" />
+
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton x:Name="SwapChoice" Style="{StaticResource EditChoice}" Content="Swap" Checked="OnKindChosen" IsEnabled="False"
+                                     ToolTip="Plays another clip's motion in this clip's place. Only clips of the same length with the identical track list are offered." />
+                        <local:HelpButton x:Name="SwapHelp" Heading="Swap" Text="{x:Static lib:HelpTexts.Swap}" />
+                    </StackPanel>
                     <TextBlock x:Name="SwapReason" Style="{StaticResource Reason}" Visibility="Collapsed" />
                     <TextBlock x:Name="SwapWarning" Style="{StaticResource Warning}" Visibility="Collapsed" />
                     <DockPanel x:Name="SwapPanel" Margin="20,0,0,0" IsEnabled="False">
@@ -279,6 +286,66 @@
                             </ComboBox.ItemTemplate>
                         </ComboBox>
                     </DockPanel>
+
+                    <!-- Replace: another game clip's motion or a .glb on this clip, fitted to its exact length; the clip keeps its events -->
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <RadioButton x:Name="ReplaceChoice" Style="{StaticResource EditChoice}" Content="Replace" Checked="OnKindChosen" IsEnabled="False"
+                                     ToolTip="Puts another game clip's motion, or a .glb's, on this clip, fitted to its exact length. The clip keeps its own events." />
+                        <local:HelpButton x:Name="ReplaceHelp" Heading="Replace" Text="{x:Static lib:HelpTexts.Replace}" />
+                    </StackPanel>
+                    <!-- never greyed whole, so its help stays readable: Apply waits for a clip, a source and a fit that reads -->
+                    <StackPanel x:Name="ReplacePanel" Margin="20,0,0,0">
+                        <WrapPanel>
+                            <RadioButton x:Name="FromClipChoice" GroupName="ReplaceSource" Content="Game clip" IsChecked="True" Margin="0,0,12,0" Checked="OnReplaceChanged" />
+                            <RadioButton x:Name="FromGlbChoice" GroupName="ReplaceSource" Content=".glb file" Checked="OnReplaceChanged" />
+                        </WrapPanel>
+                        <StackPanel x:Name="FromClipPanel">
+                            <TextBox x:Name="ReplaceSearch" Margin="0,2" TextChanged="OnReplaceSearch" ToolTip="Words of the source clip's name, or its ID in hex, as the Library's search takes them" />
+                            <ListBox x:Name="ReplaceList" Height="120" SelectionChanged="OnReplaceSourceChosen" VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock TextTrimming="CharacterEllipsis" FontSize="11">
+                                            <Run Text="{Binding Name, Mode=OneWay}" /><Run Text="  " /><Run Text="{Binding Duration, Mode=OneWay, StringFormat=F3}" /><Run Text=" s  " /><Run Text="{Binding StatusText, Mode=OneWay}" Foreground="{DynamicResource Grb.TextSecondary}" />
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+                        <WrapPanel x:Name="FromGlbPanel" Visibility="Collapsed">
+                            <Button x:Name="ReplaceGlbButton" Content="Choose .glb..." Click="OnReplaceGlb" Margin="0,2,6,2" />
+                            <TextBlock x:Name="ReplaceGlbText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="11" />
+                        </WrapPanel>
+                        <TextBlock x:Name="ReplaceSourceText" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,2" />
+                        <StackPanel x:Name="FitPanel" Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Fit" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <local:HelpButton x:Name="FitHelp" Heading="Fit" Text="{x:Static lib:HelpTexts.Fit}" />
+                            </StackPanel>
+                            <WrapPanel>
+                                <RadioButton x:Name="CutChoice" GroupName="FitMode" Content="Cut" IsChecked="True" Margin="0,0,10,0" Checked="OnReplaceChanged" />
+                                <RadioButton x:Name="StretchChoice" GroupName="FitMode" Content="Speed" Margin="0,0,10,0" Checked="OnReplaceChanged" />
+                                <RadioButton x:Name="HoldChoice" GroupName="FitMode" Content="Hold" Checked="OnReplaceChanged" />
+                            </WrapPanel>
+                            <WrapPanel x:Name="CutPanel">
+                                <TextBlock Text="Start frame" Style="{StaticResource Label}" VerticalAlignment="Center" />
+                                <local:NumberBox x:Name="CutStartBox" Width="64" Text="0" TextChanged="OnReplaceNumbers" />
+                                <Button x:Name="SuggestButton" Content="Suggest" Click="OnSuggestCut" Margin="6,0,0,0" ToolTip="The start where the cut's first and last frames match best, so the loop closes best" />
+                            </WrapPanel>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <CheckBox x:Name="LoopFitBox" Content="Seamless loop" VerticalAlignment="Center" Checked="OnReplaceChanged" Unchecked="OnReplaceChanged" />
+                            <local:HelpButton x:Name="LoopHelp" Heading="Seamless loop" Text="{x:Static lib:HelpTexts.SeamlessLoop}" />
+                            <local:NumberBox x:Name="LoopFramesBox" Width="48" Text="30" TextChanged="OnReplaceNumbers" ToolTip="The frames blended into the first frame's pose (30 = 0.5 s)" />
+                            <TextBlock Text="frames" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <TextBlock Text="Root motion" Style="{StaticResource Label}" VerticalAlignment="Center" />
+                            <local:NumberBox x:Name="RootScaleBox" Width="48" Text="1" TextChanged="OnReplaceNumbers" ToolTip="How far the source's root travels here: 1 as it is, 0 stays in place (its turn kept)" />
+                            <TextBlock Text="x  (0 = stays in place)" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,0,0" />
+                        </StackPanel>
+                        <TextBlock x:Name="TrackMapText" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,4,0,0" />
+                    </StackPanel>
                 </StackPanel>
                 </ScrollViewer>
 

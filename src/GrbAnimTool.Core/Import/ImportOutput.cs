@@ -12,7 +12,7 @@ public sealed record ImportFiles(RecordPackage Package, IReadOnlyList<string> Re
 public static class ImportOutput
 {
     /// <summary>The report's file name for a record file: <c>index_-_name.checks.txt</c>.</summary>
-    public static string ReportFileName(ClipEntry c) => $"{c.Index}_-_{c.Name}.checks.txt";
+    public static string ReportFileName(ClipEntry c) => $"{RecordFileWriter.FileIndexOf(c)}_-_{c.Name}.checks.txt";
 
     const string NothingWritten = "Nothing was written.";
 
@@ -33,13 +33,7 @@ public static class ImportOutput
         var protect = Export.ClipExport.ProtectedFolders(g).Concat(alsoProtected).ToList();
         var reports = results.Select(r => (ReportFileName(r.Slot), new UTF8Encoding(false).GetBytes(r.ReportText()))).ToList();
         var items = new List<RecordFileItem>();
-        foreach (var r in results)
-        {
-            var c = r.Slot;
-            if (c.Index < 0 || c.Index >= g.Records.Count || g.Records[c.Index].Index != c.Index || g.Records[c.Index].Id != c.Id || g.Records[c.Index].Name != c.Name)
-                throw new RecordFileException($"{c.Name} 0x{c.Id:X16} isn't record {c.Index} of the game folder's animation datafile");
-            items.Add(new RecordFileItem(c.Index, c.Name, c.Id, r.Record));
-        }
+        foreach (var r in results) items.Add(RecordFileWriter.ItemOf(g, r.Slot, r.Record));
         bool apart = reportFolder is not null && !SameFolder(reportFolder, folder);
         if (apart)
         {

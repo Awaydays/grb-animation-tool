@@ -45,6 +45,62 @@ static partial class Program
         return r.Report.Verdict == CheckLevel.Fail ? 3 : 0;
     }
 
+    /// <summary>replace: another clip's motion (--source) or a .glb's (--glb) put on a clip, fitted to its exact length (--fit cut, speed or
+    /// hold, a cut from --start, or the suggested start when none is given), with --loop [frames] and --root-scale; written as a record file
+    /// with its check report, as import writes one. Exit codes as import's.</summary>
+    static int Replace(string game, Dictionary<string, string> o)
+    {
+        using var g = GameInstall.Open(game, o.GetValueOrDefault("forge"));
+        var slot = FindClip(g, Need(o, "clip"));
+        string outDir = Need(o, "out");
+        var src = o.TryGetValue("source", out var sn) ? FindClip(g, sn) : null;
+        string? glb = o.GetValueOrDefault("glb");
+        if ((src is null) == (glb is null)) return Fail("error: replace takes one of --source <clip> and --glb <file>");
+        var mode = o.GetValueOrDefault("fit") switch
+        {
+            null or "cut" => FitMode.Cut, "speed" => FitMode.Speed, "hold" => FitMode.Hold,
+            var x => throw new ArgumentException($"--fit {x}: cut, speed or hold"),
+        };
+        int loopFrames = o.TryGetValue("loop", out var lf) && int.TryParse(lf, out int lv) ? lv : ClipFit.DefaultLoopFrames;
+        double root = o.TryGetValue("root-scale", out var rs) ? double.Parse(rs, System.Globalization.CultureInfo.InvariantCulture) : 1;
+        var fit = new FitOptions { Mode = mode, Loop = o.ContainsKey("loop"), LoopFrames = loopFrames, RootScale = root };
+        var graph = ClipGraph.Read(g);
+        ImportResult r;
+        try
+        {
+            ImportResult Run(FitOptions f) => src is not null ? ClipReplace.FromClip(g.Skeleton, g.SharedTable, slot, src, f, graph.Verdict(slot.Id), true)
+                : ClipImport.Run(g, slot, glb!, graph, f);
+            if (o.TryGetValue("start", out var st)) fit = fit with { CutStart = int.Parse(st, System.Globalization.CultureInfo.InvariantCulture) };
+            else if (mode == FitMode.Cut && Run(fit with { Mode = FitMode.Hold, Loop = false }).Unfitted is { } u && ClipFit.SuggestCut(u, slot.LastTick) is int at)
+            {
+                fit = fit with { CutStart = at };
+                Console.WriteLine($"suggested cut start: frame {at}");
+            }
+            r = Run(fit);
+        }
+        catch (ImportRefusedException ex)
+        {
+            Console.Error.WriteLine($"refused ({ex.Reason}): {ex.Message}");
+            return 1;
+        }
+        Console.Write(r.ReportText());
+        var (filled, dropped, kept) = ClipReplace.TrackMap(r, g.Skeleton);
+        Console.WriteLine($"track map: filled with the rest pose {filled.Count} ({string.Join(", ", filled)}); dropped {dropped.Count} ({string.Join(", ", dropped)}); kept {kept.Count}");
+        foreach (var w in r.Report.Results.Where(x => x.Level != CheckLevel.Pass)) Console.Error.WriteLine(w.Line);
+        if (PackageEntries.Unchanged(g, slot, r.Record) is { } same)
+        {
+            Console.Error.WriteLine($"refused (unchanged): {slot.Name}: {same}. Nothing was written.");
+            return 1;
+        }
+        ImportFiles files;
+        try { files = ImportOutput.Write(g, outDir, [r], o.ContainsKey("overwrite"), o.GetValueOrDefault("report")); }
+        catch (RecordFileException ex) when (ex.FilesWritten) { Console.Error.WriteLine("written, but: " + ex.Message); return 3; }
+        catch (RecordFileException ex) { Console.Error.WriteLine("refused: " + ex.Message); return 1; }
+        foreach (var f in files.Package.Files) Console.WriteLine($"wrote {f.Path}: {f.Length} B, SHA-256 {f.Sha256}");
+        foreach (var p in files.Reports) Console.WriteLine($"wrote {p}");
+        return r.Report.Verdict == CheckLevel.Fail ? 3 : 0;
+    }
+
     /// <summary>compare: a record file read back by the core against the install's own clip of the same ID: per bone, how far its local
     /// rotation and its place in the clip's world differ, at their worst tick, the bones that differ most first; then the mover.</summary>
     static int Compare(string game, Dictionary<string, string> o)

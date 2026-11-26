@@ -611,6 +611,7 @@ public partial class LogView : UserControl
                 if (lines[i].Kind != ClipLogKind.Start) continue;
                 lines[i].Clip = found[i];
                 lines[i].Lookup = LookupOf(lines[i], found[i]);
+                lines[i].OtherName = found[i] is null && g is not null ? g.OtherClipNames.GetValueOrDefault(lines[i].ClipId) : null;
             }
             // the lines added meanwhile were looked up in this install already (or look it up again themselves)
             for (int i = lines.Length; i < _lines.Count; i++) counts.Add(_lines[i]);

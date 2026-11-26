@@ -106,6 +106,29 @@ public partial class MainWindow : Window
 
     /// <summary>A theme chosen in the Settings menu: shown at once, and remembered for the next run (not by an automated run, which
     /// neither reads nor writes the settings).</summary>
+    void OnQuickStart(object sender, RoutedEventArgs e) => Notice.Show(Core.Library.HelpTexts.QuickStart, this, "Quick start");
+
+    void OnAbout(object sender, RoutedEventArgs e) =>
+        Notice.Show($"{Core.Export.ToolInfo.Name} {Core.Export.ToolInfo.Version}\n\nLicensed under GPL-3.0-or-later, with an additional permission for loading "
+            + "the game's own Oodle library (see LICENSE and LICENSE-EXCEPTION.md beside the program).", this, "About");
+
+    /// <summary>The Package folder menu opened: the folder set shown, None greyed while none is set.</summary>
+    void OnPackageFolderOpened(object sender, RoutedEventArgs e)
+    {
+        PackageFolderChooseItem.ToolTip = PackagePage.PackageFolderSetting is { } f ? $"Now: {f}" : "None set: Build starts in the folder last built in.";
+        PackageFolderClearItem.IsEnabled = PackagePage.PackageFolderSetting is not null;
+    }
+
+    void OnPackageFolderChoose(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "Choose the folder Build starts in (a folder of your own, never the game's)" };
+        if (PackagePage.PackageFolderSetting is { } f && System.IO.Directory.Exists(f)) dlg.InitialDirectory = f;
+        if (dlg.ShowDialog(this) != true) return;
+        PackagePage.SetPackageFolder(dlg.FolderName);
+    }
+
+    void OnPackageFolderClear(object sender, RoutedEventArgs e) => PackagePage.SetPackageFolder(null);
+
     void OnThemeChosen(object sender, RoutedEventArgs e)
     {
         var choice = sender == ThemeDarkItem ? ThemeChoice.Dark : sender == ThemeLightItem ? ThemeChoice.Light : ThemeChoice.System;
@@ -183,7 +206,7 @@ public partial class MainWindow : Window
         }
         if (_args.ImportKeep)
         {
-            if (ImportPage.Keep() is { } e3) return e3;
+            if (await ImportPage.KeepAsync() is { } e3) return e3;
             Console.WriteLine($"kept {r.Slot.Name} for the package ({Core.Import.PackageList.Current.Count} kept)");
         }
         return null;

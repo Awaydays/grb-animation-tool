@@ -43,7 +43,7 @@ public sealed class SwapSources
             try { k = Key(e.Record, table); }
             catch (Exception ex) when (ex is InvalidDataException or ArgumentException) { k = null; }
             if (k is null) continue;
-            keyOf[e.Id] = k;
+            keyOf[e.Key] = k;
             if (!groups.TryGetValue(k, out var l)) groups[k] = l = [];
             l.Add(e);
         }
@@ -52,7 +52,7 @@ public sealed class SwapSources
 
     /// <summary>The clips <paramref name="target"/> can take an equal swap from: every other clip of its group, by index.</summary>
     public IReadOnlyList<ClipEntry> For(ClipEntry target) =>
-        _keyOf.TryGetValue(target.Id, out var k) ? _groups[k].Where(c => c.Id != target.Id).OrderBy(c => c.Index).ToList() : [];
+        _keyOf.TryGetValue(target.Key, out var k) ? _groups[k].Where(c => c.Key != target.Key && c.Id != target.Id).OrderBy(c => c.Index).ToList() : [];
 
     /// <summary>How many clips have at least one swap source.</summary>
     public int Swappable => _groups.Values.Where(g => g.Count > 1).Sum(g => g.Count);

@@ -6,11 +6,11 @@
       <Description>"Clip logger - DX11 (GRB.exe)"</Description>
       <Options moHideChildren="1"/>
       <VariableType>Auto Assembler Script</VariableType>
-      <AssemblerScript>{ GRB - Clip logger. DX11 build (GRB.exe) only. }
+      <AssemblerScript>{ GRB Clip Logger 1.0.7, DX11 build (GRB.exe) only. Copyright (C) 2026 Awaydays. GPL-3.0-or-later: see LICENSE. }
 
 [ENABLE]
 {$lua}
-if syntaxcheck then return "define(GRBCLIP,GRB.exe)" end
+if syntaxcheck then return "define(GRBCLIP,GRB.exe)\r\nalloc(grbclipMem,$41000)" end
 local B = {
   module = "GRB.exe", build = "DX11",
   aob = "48 89 5C 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 30 45 0F B6 71 01 48 8B F1 45 0F B6 39 49 8B C8 4D 8B E9 4D 8B E0 E8 ?? ?? ?? ?? 49 8B CC 48 89 46 18 C7 46 20 00 00 00 00 E8",
@@ -47,7 +47,8 @@ end
 registerSymbol("GRBCLIP", hit, true)
 
 local L = { B = B, base = base, hit = hit, kind = {}, last = {}, lastMotion = {}, n = {
-  seen = 0, written = 0, repeats = 0, motion = 0, sync = 0, lost = 0, capped = 0 }, r = 0, bytes = 0 }
+  seen = 0, written = 0, repeats = 0, motion = 0, sync = 0, lost = 0, capped = 0 }, r = 0, bytes = 0,
+  pid = getOpenedProcessID() }
 
 for off, k in pairs(B.callers) do
   local ret = base + off
@@ -57,9 +58,18 @@ for off, k in pairs(B.callers) do
   else say(string.format("the call before %s+%X does not reach the hook - its starts show as \"other\"", B.module, off)) end
 end
 
+local cave
 local function refuse(s)
+  if cave then pcall(deAlloc, cave) end
+  pcall(unregisterSymbol, "grbclipMem")
   pcall(unregisterSymbol, "GRBCLIP")
   error(s .. " - not enabled, nothing logged", 0)
+end
+
+-- the cave is allocated here, before the site is written: the 5-byte jump must reach it
+cave = autoAssemble("alloc(grbclipMem,$41000,GRBCLIP)\nregistersymbol(grbclipMem)") and getAddressSafe("grbclipMem")
+if not cave or math.abs(cave + 0x100 - (hit + 5)) &gt;= 0x7FF00000 then
+  refuse("the logger's memory could not be placed near the game's code")
 end
 
 -- the user's Documents folder as Windows reports it (also when it was moved)
@@ -85,7 +95,7 @@ end
 
 local function openLog()
   local docs = documents()
-  if not docs then refuse("your Documents folder could not be had from Windows, or it is not there; the log goes only to \"GRB - Animation logging\" in it") end
+  if not docs then refuse("your Documents folder could not be read from Windows, or it is not there; the log goes only to \"GRB - Animation logging\" in it") end
   local dir = docs .. "\\GRB - Animation logging"
   local name = string.format("clips_%s_%s.csv", B.build, os.date("%Y-%m-%d_%H%M%S"))
   local path = dir .. "\\" .. name
@@ -123,8 +133,13 @@ function L.out(s, data)
 end
 function L.note(s) L.out("# " .. s .. "\n") end
 function L.final(s) L.f:write("# " .. s .. "\n") end
+-- true while the attached process is the one hooked and the site holds this entry's jump
+function L.hooked()
+  local op, rel = readBytes(L.hit, 1, false), readInteger(L.hit + 1, true)
+  return getOpenedProcessID() == L.pid and op == 0xE9 and rel and L.hit + 5 + rel == cave + 0x100
+end
 function L.mark(label)
-  if not L.mem then return end
+  if L.stopped or not (L.mem and L.hooked()) then return end
   pcall(L.drain)
   local t = readQword(0x7FFE0014) or L.t0
   local c = L.n
@@ -302,26 +317,23 @@ end
 
 function L.tick()
   if L.stopped then return end
+  if not L.hooked() then
+    if L.mem then L.stop("the game closed, or Cheat Engine was attached to another process") return end
+    L.waits = (L.waits or 0) + 1
+    if L.waits &gt; 30 then L.stop("the hook was not applied") end
+    return
+  end
   if not L.mem then
-    local m = getAddressSafe("grbclipMem")
-    local op = readBytes(L.hit, 1, false)
-    local rel = readInteger(L.hit + 1, true)
-    if m and op == 0xE9 and rel and L.hit + 5 + rel == m + 0x100 then
-      L.mem = m
-      L.t0 = readQword(0x7FFE0014)
-      L.bias = readQword(0x7FFE0020) or 0
-      L.note(string.format("GRB Clip Logger, %s build (%s), started %s", B.build, B.module, L.clock(L.t0)))
-      L.settings()
-      L.out("time,seconds,character,entity,entity_id,clip_id,source\n")
-      L.note("the player's character: searching")
-      writeInteger(m, 1)
-      L.note("the log folder: " .. L.dir)
-      say("logging to " .. L.path)
-    else
-      L.waits = (L.waits or 0) + 1
-      if L.waits &gt; 30 then L.stop("the hook was not applied") end
-      return
-    end
+    L.mem = cave
+    L.t0 = readQword(0x7FFE0014)
+    L.bias = readQword(0x7FFE0020) or 0
+    L.note(string.format("GRB Clip Logger, %s build (%s), started %s", B.build, B.module, L.clock(L.t0)))
+    L.settings()
+    L.out("time,seconds,character,entity,entity_id,clip_id,source\n")
+    L.note("the player's character: searching")
+    writeInteger(cave, 1)
+    L.note("the log folder: " .. L.dir)
+    say("logging to " .. L.path)
   end
   L.bias = readQword(0x7FFE0020) or L.bias
   L.settings()
@@ -345,13 +357,19 @@ function L.stop(why)
     pcall(function() ms.destroy() end)
   end
   if L.mem then
-    writeInteger(L.mem, 0)
-    pcall(L.drain)
+    -- the game's memory is touched only while it is still the process hooked
+    local live = L.hooked()
+    if live then
+      writeInteger(L.mem, 0)
+      pcall(L.drain)
+    end
     local c = L.n
     L.final(string.format("stopped (%s): %d starts read, %d written, %d repeats within the window skipped, %d motion-matching picks skipped, %d sync steps skipped, %d not written past the size limit",
       why, c.seen, c.written, c.repeats, c.motion, c.sync, c.capped))
-    L.final(string.format("dropped (the buffer was full): %d; lost (a slot never completed): %d; hook calls, all characters: %d",
-      readQword(L.mem + 0x20) or 0, c.lost, readQword(L.mem + 0x28) or 0))
+    if live then
+      L.final(string.format("dropped (the buffer was full): %d; lost (a slot never completed): %d; hook calls, all characters: %d",
+        readQword(L.mem + 0x20) or 0, c.lost, readQword(L.mem + 0x28) or 0))
+    end
   else
     L.final("not started: " .. why)
   end
@@ -371,7 +389,6 @@ grbClipLog = L
 {$asm}
 
 assert(GRBCLIP,48 89 5C 24 18 48 89 54 24 10)
-alloc(grbclipMem,$41000,GRBCLIP)
 label(grbclipOn)
 label(grbclipAll)
 label(grbclipPlayer)
@@ -391,7 +408,6 @@ label(grbclipOut)
 label(grbclipSkip)
 label(grbclipRing)
 label(grbclipRet)
-registersymbol(grbclipMem)
 
 grbclipMem:
 grbclipOn:
@@ -496,6 +512,13 @@ local site, mem = getAddressSafe("GRBCLIP"), getAddressSafe("grbclipMem")
 local base = getAddressSafe(MODULE)
 local size = base and getModuleSize(MODULE)
 if not (site and base and size and site &gt;= base and site &lt; base + size) then
+  -- a logger whose game is gone is stopped all the same, with nothing written to the game
+  if grbClipLog and grbClipLog.stop and grbClipLog.hooked and not grbClipLog.hooked() then
+    pcall(grbClipLog.stop, "the game closed, or Cheat Engine was attached to another process")
+    pcall(unregisterSymbol, "grbclipMem")
+    pcall(unregisterSymbol, "GRBCLIP")
+    return ""
+  end
   print("GRB clip logger: the hook site registered is not in " .. MODULE .. " - nothing written, nothing stopped")
   return ""
 end
@@ -551,11 +574,11 @@ return "GRBCLIP:\r\n  db 48 89 5C 24 18\r\n" .. done
       <Description>"Clip logger - Vulkan (GRB_vulkan.exe)"</Description>
       <Options moHideChildren="1"/>
       <VariableType>Auto Assembler Script</VariableType>
-      <AssemblerScript>{ GRB - Clip logger. Vulkan build (GRB_vulkan.exe) only. }
+      <AssemblerScript>{ GRB Clip Logger 1.0.7, Vulkan build (GRB_vulkan.exe) only. Copyright (C) 2026 Awaydays. GPL-3.0-or-later: see LICENSE. }
 
 [ENABLE]
 {$lua}
-if syntaxcheck then return "define(GRBCLIP,GRB_vulkan.exe)" end
+if syntaxcheck then return "define(GRBCLIP,GRB_vulkan.exe)\r\nalloc(grbclipMem,$41000)" end
 local B = {
   module = "GRB_vulkan.exe", build = "Vulkan",
   aob = "48 89 5C 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 30 45 0F B6 71 01 48 8B F1 45 0F B6 39 49 8B C8 4D 8B E9 4D 8B E0 E8 ?? ?? ?? ?? 49 8B CC 48 89 46 18 C7 46 20 00 00 00 00 E8",
@@ -592,7 +615,8 @@ end
 registerSymbol("GRBCLIP", hit, true)
 
 local L = { B = B, base = base, hit = hit, kind = {}, last = {}, lastMotion = {}, n = {
-  seen = 0, written = 0, repeats = 0, motion = 0, sync = 0, lost = 0, capped = 0 }, r = 0, bytes = 0 }
+  seen = 0, written = 0, repeats = 0, motion = 0, sync = 0, lost = 0, capped = 0 }, r = 0, bytes = 0,
+  pid = getOpenedProcessID() }
 
 for off, k in pairs(B.callers) do
   local ret = base + off
@@ -602,9 +626,18 @@ for off, k in pairs(B.callers) do
   else say(string.format("the call before %s+%X does not reach the hook - its starts show as \"other\"", B.module, off)) end
 end
 
+local cave
 local function refuse(s)
+  if cave then pcall(deAlloc, cave) end
+  pcall(unregisterSymbol, "grbclipMem")
   pcall(unregisterSymbol, "GRBCLIP")
   error(s .. " - not enabled, nothing logged", 0)
+end
+
+-- the cave is allocated here, before the site is written: the 5-byte jump must reach it
+cave = autoAssemble("alloc(grbclipMem,$41000,GRBCLIP)\nregistersymbol(grbclipMem)") and getAddressSafe("grbclipMem")
+if not cave or math.abs(cave + 0x100 - (hit + 5)) &gt;= 0x7FF00000 then
+  refuse("the logger's memory could not be placed near the game's code")
 end
 
 -- the user's Documents folder as Windows reports it (also when it was moved)
@@ -630,7 +663,7 @@ end
 
 local function openLog()
   local docs = documents()
-  if not docs then refuse("your Documents folder could not be had from Windows, or it is not there; the log goes only to \"GRB - Animation logging\" in it") end
+  if not docs then refuse("your Documents folder could not be read from Windows, or it is not there; the log goes only to \"GRB - Animation logging\" in it") end
   local dir = docs .. "\\GRB - Animation logging"
   local name = string.format("clips_%s_%s.csv", B.build, os.date("%Y-%m-%d_%H%M%S"))
   local path = dir .. "\\" .. name
@@ -668,8 +701,13 @@ function L.out(s, data)
 end
 function L.note(s) L.out("# " .. s .. "\n") end
 function L.final(s) L.f:write("# " .. s .. "\n") end
+-- true while the attached process is the one hooked and the site holds this entry's jump
+function L.hooked()
+  local op, rel = readBytes(L.hit, 1, false), readInteger(L.hit + 1, true)
+  return getOpenedProcessID() == L.pid and op == 0xE9 and rel and L.hit + 5 + rel == cave + 0x100
+end
 function L.mark(label)
-  if not L.mem then return end
+  if L.stopped or not (L.mem and L.hooked()) then return end
   pcall(L.drain)
   local t = readQword(0x7FFE0014) or L.t0
   local c = L.n
@@ -847,26 +885,23 @@ end
 
 function L.tick()
   if L.stopped then return end
+  if not L.hooked() then
+    if L.mem then L.stop("the game closed, or Cheat Engine was attached to another process") return end
+    L.waits = (L.waits or 0) + 1
+    if L.waits &gt; 30 then L.stop("the hook was not applied") end
+    return
+  end
   if not L.mem then
-    local m = getAddressSafe("grbclipMem")
-    local op = readBytes(L.hit, 1, false)
-    local rel = readInteger(L.hit + 1, true)
-    if m and op == 0xE9 and rel and L.hit + 5 + rel == m + 0x100 then
-      L.mem = m
-      L.t0 = readQword(0x7FFE0014)
-      L.bias = readQword(0x7FFE0020) or 0
-      L.note(string.format("GRB Clip Logger, %s build (%s), started %s", B.build, B.module, L.clock(L.t0)))
-      L.settings()
-      L.out("time,seconds,character,entity,entity_id,clip_id,source\n")
-      L.note("the player's character: searching")
-      writeInteger(m, 1)
-      L.note("the log folder: " .. L.dir)
-      say("logging to " .. L.path)
-    else
-      L.waits = (L.waits or 0) + 1
-      if L.waits &gt; 30 then L.stop("the hook was not applied") end
-      return
-    end
+    L.mem = cave
+    L.t0 = readQword(0x7FFE0014)
+    L.bias = readQword(0x7FFE0020) or 0
+    L.note(string.format("GRB Clip Logger, %s build (%s), started %s", B.build, B.module, L.clock(L.t0)))
+    L.settings()
+    L.out("time,seconds,character,entity,entity_id,clip_id,source\n")
+    L.note("the player's character: searching")
+    writeInteger(cave, 1)
+    L.note("the log folder: " .. L.dir)
+    say("logging to " .. L.path)
   end
   L.bias = readQword(0x7FFE0020) or L.bias
   L.settings()
@@ -890,13 +925,19 @@ function L.stop(why)
     pcall(function() ms.destroy() end)
   end
   if L.mem then
-    writeInteger(L.mem, 0)
-    pcall(L.drain)
+    -- the game's memory is touched only while it is still the process hooked
+    local live = L.hooked()
+    if live then
+      writeInteger(L.mem, 0)
+      pcall(L.drain)
+    end
     local c = L.n
     L.final(string.format("stopped (%s): %d starts read, %d written, %d repeats within the window skipped, %d motion-matching picks skipped, %d sync steps skipped, %d not written past the size limit",
       why, c.seen, c.written, c.repeats, c.motion, c.sync, c.capped))
-    L.final(string.format("dropped (the buffer was full): %d; lost (a slot never completed): %d; hook calls, all characters: %d",
-      readQword(L.mem + 0x20) or 0, c.lost, readQword(L.mem + 0x28) or 0))
+    if live then
+      L.final(string.format("dropped (the buffer was full): %d; lost (a slot never completed): %d; hook calls, all characters: %d",
+        readQword(L.mem + 0x20) or 0, c.lost, readQword(L.mem + 0x28) or 0))
+    end
   else
     L.final("not started: " .. why)
   end
@@ -916,7 +957,6 @@ grbClipLog = L
 {$asm}
 
 assert(GRBCLIP,48 89 5C 24 18 48 89 54 24 10)
-alloc(grbclipMem,$41000,GRBCLIP)
 label(grbclipOn)
 label(grbclipAll)
 label(grbclipPlayer)
@@ -936,7 +976,6 @@ label(grbclipOut)
 label(grbclipSkip)
 label(grbclipRing)
 label(grbclipRet)
-registersymbol(grbclipMem)
 
 grbclipMem:
 grbclipOn:
@@ -1041,6 +1080,13 @@ local site, mem = getAddressSafe("GRBCLIP"), getAddressSafe("grbclipMem")
 local base = getAddressSafe(MODULE)
 local size = base and getModuleSize(MODULE)
 if not (site and base and size and site &gt;= base and site &lt; base + size) then
+  -- a logger whose game is gone is stopped all the same, with nothing written to the game
+  if grbClipLog and grbClipLog.stop and grbClipLog.hooked and not grbClipLog.hooked() then
+    pcall(grbClipLog.stop, "the game closed, or Cheat Engine was attached to another process")
+    pcall(unregisterSymbol, "grbclipMem")
+    pcall(unregisterSymbol, "GRBCLIP")
+    return ""
+  end
   print("GRB clip logger: the hook site registered is not in " .. MODULE .. " - nothing written, nothing stopped")
   return ""
 end

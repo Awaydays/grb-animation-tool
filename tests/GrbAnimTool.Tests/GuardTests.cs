@@ -217,7 +217,7 @@ public sealed class GuardTests : IDisposable
                 PackageBuild.Build(plan with { Problem = null }, _ => throw new InvalidOperationException("must not write"), _ => throw new InvalidOperationException("must not write"), false, [_game])).Message);
         }
         // the junction is said as where it leads
-        Assert.Contains($"{toSub} leads to {Path.Combine(pkg, "sub")}, inside {pkg}, a package this tool built, or a local undo folder a pre-release build of it wrote",
+        Assert.Contains($"{toSub} leads to {Path.Combine(pkg, "sub")}, inside {pkg}, a package this tool built, or a local undo folder an earlier version of it wrote",
             RecordFileWriter.OutputRefusal(Path.Combine(toSub, "new"), [_game]));
         Assert.Equal(before, Tree());
         Assert.Equal("the local undo note", File.ReadAllText(Path.Combine(undo, "README.txt")));
@@ -455,25 +455,118 @@ public sealed class GuardTests : IDisposable
         Assert.Equal([Path.Combine(_game, "data")], Directory.EnumerateFileSystemEntries(_game));
     }
 
-    /// <summary>The decision for a folder over a share on a protected folder's volume, without a share: with the protected folder on this
-    /// computer, a folder that stands inside it is refused, one that stands outside it isn't, and one whose place can't be read is refused;
-    /// with the protected folder itself on a share (a NAS), nothing is refused for it and nothing is opened.</summary>
+    /// <summary>The decision for a folder over a share, on fake volumes: on a local volume (the same serial), a folder that stands inside
+    /// the protected folder there is refused, by spelling or by identity, whatever name the share or the protected folder was reached by
+    /// (a name not known as this computer's too); one that stands outside it isn't, even with the protected folder itself opened through
+    /// a share of this computer; one whose place can't be read is refused. A serial no local volume has (a NAS) refuses nothing and
+    /// opens nothing. A 32-bit serial matches a volume's low half. A share without file IDs, a protected folder on one, and volumes that
+    /// couldn't be listed are refused, saying the way out.</summary>
     [Fact]
-    public void AShareOnAProtectedFoldersVolumeIsRefusedOnlyWhenThatFolderIsOnThisComputer()
+    public void AFolderOverAShareIsJudgedByWhereItStandsOnThisComputer()
     {
-        var local = new FolderGuard.Place(@"C:\Games\GRB", [@"C:\Games\GRB"], (7, 9));
+        const ulong Vol = 0xABCD_0000_1234_5678;
+        List<(string, ulong)> volumes = [(@"\\?\Volume{one}\", 3), (@"\\?\Volume{two}\", Vol)];
+        List<(string Path, (ulong, UInt128)? Id)> inside = [(@"C:\Games\GRB\data", (Vol, 42)), (@"C:\Games\GRB", (Vol, 9)), (@"C:\Games", (Vol, 5)), (@"C:\", (Vol, 5))];
+        List<(string Path, (ulong, UInt128)? Id)> outside = [(@"C:\Mods\out", (Vol, 43)), (@"C:\Mods", (Vol, 6)), (@"C:\", (Vol, 5))];
+        var local = new FolderGuard.Place(@"C:\Games\GRB", [@"C:\Games\GRB"], (Vol, 9));
+        string d = @"\\alias.local\mods\out";
+        Func<string, List<(string, (ulong, UInt128)?)>?> On(List<(string, (ulong, UInt128)?)>? chain) =>
+            root => root == @"\\?\Volume{two}\" ? chain : throw new InvalidOperationException("opened on another volume: " + root);
+        Assert.Contains(@"is C:\Games\GRB\data on this computer", FolderGuard.ShareRefusal(d, (Vol, 42), [local], volumes, On(inside)));
+        Assert.Null(FolderGuard.ShareRefusal(d, (Vol, 43), [local], volumes, On(outside)));
+        Assert.Contains("couldn't be read", FolderGuard.ShareRefusal(d, (Vol, 42), [local], volumes, On(null)));
+        Assert.Contains("choose the folder by its drive path", FolderGuard.ShareRefusal(d, (Vol, 42), [local], volumes, On(null)));
+        // a NAS: no local volume has its serial
         var nas = new FolderGuard.Place(@"\\nas\games\GRB", [@"\\nas\games\GRB"], (7, 9));
-        string d = @"\\nas\mods\out";
-        Assert.Contains(@"is C:\Games\GRB\data on this computer", FolderGuard.ShareRefusal(d, local, [local], () => @"\\?\C:\Games\GRB\data"));
-        Assert.Null(FolderGuard.ShareRefusal(d, local, [local], () => @"\\?\C:\Mods\out"));
-        Assert.Contains("couldn't be read", FolderGuard.ShareRefusal(d, local, [local], () => null));
-        bool opened = false;
-        Assert.Null(FolderGuard.ShareRefusal(d, nas, [nas], () => { opened = true; return null; }));
-        Assert.False(opened);
-        // the game folder itself opened through a share of this computer is looked for as a local one: inside refused, unreadable refused
-        var here = new FolderGuard.Place(@"\\127.0.0.1\games\GRB", [@"\\127.0.0.1\games\GRB"], (7, 9));
-        Assert.Contains(@"is C:\Games\GRB\data on this computer", FolderGuard.ShareRefusal(d, here, [here, local], () => @"\\?\C:\Games\GRB\data"));
-        Assert.Contains("couldn't be read", FolderGuard.ShareRefusal(d, here, [here], () => null));
+        Assert.Null(FolderGuard.ShareRefusal(@"\\nas\mods\out", (7, 42), [nas], volumes, _ => throw new InvalidOperationException("must not open")));
+        // the protected folder opened through a share of this computer, by a known name or not: found by its identity, and a folder
+        // outside it is allowed rather than refused for want of the folder's local place
+        foreach (var host in new[] { "127.0.0.1", "alias.local" })
+        {
+            var viaShare = new FolderGuard.Place($@"\\{host}\games\GRB", [$@"\\{host}\games\GRB"], (Vol, 9));
+            Assert.Contains(@"is C:\Games\GRB\data on this computer", FolderGuard.ShareRefusal(d, (Vol, 42), [viaShare], volumes, On(inside)));
+            Assert.Null(FolderGuard.ShareRefusal(d, (Vol, 43), [viaShare], volumes, On(outside)));
+        }
+        // a 32-bit serial (GetFileInformationByHandle's) matches the volume's low half
+        Assert.Contains("on this computer", FolderGuard.ShareRefusal(d, (0x1234_5678, 42), [local], volumes, On(inside)));
+        // fail closed, naming the way out
+        foreach (var why in new[] {
+            FolderGuard.ShareRefusal(d, null, [local], volumes, On(inside)),
+            FolderGuard.ShareRefusal(d, (Vol, 43), [local, new FolderGuard.Place(@"\\dav@SSL\games", [@"\\dav@SSL\games", @"\\dav@SSL\games"], null)], volumes, On(outside)),
+            FolderGuard.ShareRefusal(d, (Vol, 43), [local], null, On(outside)) })
+        {
+            Assert.NotNull(why);
+            Assert.Contains("by its drive path", why);
+        }
+        Assert.Contains("gives no file IDs", FolderGuard.ShareRefusal(d, null, [local], volumes, On(inside)));
+    }
+
+    /// <summary>On the test's own volume: the volume is listed with its serial, the fake protected folder's subfolder is opened there by its
+    /// file ID and found with the folders above it, and the decision for it, as if it were reached over a share by a name not known as this
+    /// computer's, refuses it whether the protected folder is given by its drive path or by a share spelling; the folder beside it isn't.</summary>
+    [Fact]
+    public void AFolderIsFoundOnItsLocalVolumeByItsFileId()
+    {
+        string data = Path.Combine(_game, "data");
+        var id = FolderGuard.Identity(data) ?? throw new InvalidOperationException("no identity for " + data);
+        var oid = FolderGuard.Identity(_out) ?? throw new InvalidOperationException("no identity for " + _out);
+        var volumes = FolderGuard.LocalVolumes();
+        Assert.NotNull(volumes);
+        var root = volumes.First(v => v.Serial == id.Volume).Root;
+        var chain = FolderGuard.Here(root, id.File);
+        Assert.NotNull(chain);
+        Assert.Equal(data, chain[0].Path, ignoreCase: true);
+        Assert.Contains(chain, c => c.Path.Equals(_game, StringComparison.OrdinalIgnoreCase) && c.Id == FolderGuard.Identity(_game));
+        var guard = new FolderGuard.Place(_game, [_game], FolderGuard.Identity(_game));
+        var viaShare = new FolderGuard.Place(@"\\alias.local\games\Fake Game", [@"\\alias.local\games\Fake Game"], FolderGuard.Identity(_game));
+        foreach (var g in new[] { guard, viaShare })
+        {
+            Assert.Contains($"is {chain[0].Path} on this computer", FolderGuard.ShareRefusal(@"\\alias.local\inside", id, [g], volumes, r => FolderGuard.Here(r, id.File)));
+            Assert.Null(FolderGuard.ShareRefusal(@"\\alias.local\out", oid, [g], volumes, r => FolderGuard.Here(r, oid.File)));
+        }
+    }
+
+    /// <summary>A share the user made and named like an administrative one, rooted inside the protected folder: the administrative share
+    /// stands in for it, read (an internal hook, this thread only) as a drive that doesn't exist, so the path's spelling leads nowhere. The
+    /// path as given is checked too, over the share, and refused by where it stands on this computer; a folder beside it isn't. Skipped
+    /// (and reported so) where the share can't be reached.</summary>
+    [LocalShareFact]
+    public void AShareNamedLikeAnAdministrativeOneIsCheckedAsGiven()
+    {
+        char none = Enumerable.Range('D', 23).Select(c => (char)c).Reverse().First(c => !Directory.Exists(c + @":\"));
+        FolderGuard.AdminShareDriveForTest = none;
+        try
+        {
+            string local = Path.Combine(_game, "data"), data = Share("localhost", local);
+            Assert.StartsWith(none + @":\", FolderGuard.Canonical(data));   // the spelling alone leads nowhere
+            foreach (var p in new[] { data, Path.Combine(data, "x.glb"), Path.Combine(data, "new", "x.glb") })
+            {
+                var why = FolderGuard.Refusal(p, [_game]);
+                Assert.NotNull(why);
+                Assert.Contains($"is {local} on this computer", why, StringComparison.OrdinalIgnoreCase);
+            }
+            Assert.Null(FolderGuard.Refusal(Path.Combine(Share("localhost", _out), "new", "x.glb"), [_game]));
+        }
+        finally { FolderGuard.AdminShareDriveForTest = '\0'; }
+        Assert.Equal([Path.Combine(_game, "data")], Directory.EnumerateFileSystemEntries(_game));
+    }
+
+    /// <summary>The protected folder itself opened through a share of this computer (the administrative share, its spelling left as given):
+    /// a path through another share spelling outside it is allowed, not refused for want of the folder's place; one inside it, over the share
+    /// or by its drive path, is refused. Skipped (and reported so) where the share can't be reached.</summary>
+    [LocalShareFact]
+    public void AProtectedFolderOpenedOverAShareStillAllowsAFolderBesideIt()
+    {
+        FolderGuard.SharesUnmappedForTest = true;
+        try
+        {
+            string game = Share("localhost", _game);
+            Assert.Null(FolderGuard.Refusal(Path.Combine(Share("localhost", _out), "x.glb"), [game]));
+            Assert.Null(FolderGuard.Refusal(Path.Combine(_out, "x.glb"), [game]));
+            foreach (var p in new[] { Path.Combine(Share("localhost", Path.Combine(_game, "data")), "x.glb"), Path.Combine(_game, "data", "new", "x.glb") })
+                Assert.NotNull(FolderGuard.Refusal(p, [game]));
+        }
+        finally { FolderGuard.SharesUnmappedForTest = false; }
     }
 
     /// <summary>The forms a file to write never needs are refused with no protected folder given too.</summary>
@@ -595,7 +688,7 @@ public sealed class GuardTests : IDisposable
 
     /// <summary>This computer's other names: every address of its network interfaces (its LAN addresses), any 127.x.x.x address, the
     /// IPv6 loopback as an ipv6-literal.net name, an IPv4-mapped loopback and its host name. Each, as an administrative share, is turned
-    /// back into the drive: refused inside the fake protected folder, allowed beside it. Nothing goes over the network.</summary>
+    /// back into the drive: refused inside the fake protected folder, allowed beside it. Nothing goes to another computer.</summary>
     [Fact]
     public void OtherNamesOfThisComputerAreItsDrives()
     {
@@ -736,7 +829,8 @@ public sealed class PackagePlanNameTests(InstallFixture f)
     public void ASlotNameTheRulesRefuseIsThePlansProblem()
     {
         var slot = new Core.Install.ClipEntry { Index = 3, Id = 0x1122334455667788, Name = "bad.name", Bytes = new byte[16] };
-        var items = new List<Core.Import.PackageItem> { new(slot, new byte[16], ClipChange.Imported("x.glb"), Core.Checks.CheckLevel.Pass, "", DateTime.Now) };
+        // a record other than the slot's own bytes, so the item is a change and the name is the plan's problem
+        var items = new List<Core.Import.PackageItem> { new(slot, new byte[15], ClipChange.Imported("x.glb"), Core.Checks.CheckLevel.Pass, "", DateTime.Now) };
         var plan = PackageBuild.Plan(f.Install, items, "Mine", Path.Combine(AppContext.BaseDirectory, "plan-" + Guid.NewGuid().ToString("N")));
         Assert.StartsWith("bad.name:", plan.Problem);
         Assert.Contains("so a record file wouldn't keep it", plan.Problem);   // the name rule's own words, not another problem of the clip

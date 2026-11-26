@@ -7,7 +7,7 @@ namespace GrbAnimTool.App;
 /// theme).</summary>
 static class Notice
 {
-    public static void Show(string text, Window? owner = null)
+    public static void Show(string text, Window? owner = null, string? title = null)
     {
         var ok = new Button { Content = "OK", IsDefault = true, IsCancel = true, MinWidth = 80, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
         var body = new StackPanel { Margin = new Thickness(18) };
@@ -15,7 +15,7 @@ static class Notice
         body.Children.Add(ok);
         var w = new Window
         {
-            Title = "GRB Anim Tool",
+            Title = title is null ? Core.Export.ToolInfo.Name : $"{title} - {Core.Export.ToolInfo.Name}",
             Content = body,
             SizeToContent = SizeToContent.WidthAndHeight,
             ResizeMode = ResizeMode.NoResize,

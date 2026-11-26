@@ -1,7 +1,7 @@
 {
   "format": "grbanim-clip",
   "formatVersion": 1,
-  "tool": "GRB Anim Tool",
+  "tool": "GRB Animation Tool",
   "toolVersion": "golden",
   "glb": "golden.glb",
   "conventions": {

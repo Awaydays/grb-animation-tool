@@ -46,7 +46,7 @@ public sealed class EditMarks
         var all = await InstallEditChoices.OfInBackground(g, graph, swaps, mirror, cancel, progress: progress);
         var faulted = all.Clips.Where(k => InstallEditChoices.IsFault(k.Value)).Select(k => k.Key).ToHashSet();
         // one name per ID: two records of one ID are one clip (the first found)
-        var names = InstallEditChoices.ClipsOf(g).ToDictionary(c => c.Id, c => c.Name);
+        var names = InstallEditChoices.ClipsOf(g).ToDictionary(c => c.Key, c => c.Name);
         static string With(string what, string? reason) => reason is null ? what : $"{what}: {reason}";
         return new EditMarks(all.Clips.Where(k => !faulted.Contains(k.Key)).ToDictionary(k => k.Key, k => MaskOf(k.Value)), faulted)
         {
@@ -94,7 +94,21 @@ public sealed class EditMarks
     public IReadOnlyDictionary<ulong, byte> Masks => _of;
 
     /// <summary>The clip's bits, or null when it wasn't worked out.</summary>
-    public byte? MaskFor(ClipEntry c) => _of.TryGetValue(c.Id, out var m) ? m : null;
+    public byte? MaskFor(ClipEntry c) => _of.TryGetValue(c.Key, out var m) ? m : null;
+
+    /// <summary>These marks with <paramref name="rows"/>' (rows of the unpacked folder's files, worked out apart: the cache keeps the
+    /// forge's clips only) added; the rows' faults join <see cref="Unknown"/>.</summary>
+    public EditMarks With(InstallEditChoices rows)
+    {
+        var of = new Dictionary<ulong, byte>(_of);
+        var unknown = new HashSet<ulong>(_unknown);
+        foreach (var (k, v) in rows.Clips)
+            if (InstallEditChoices.IsFault(v)) unknown.Add(k); else of[k] = MaskOf(v);
+        return new EditMarks(of, unknown) { Incomplete = Incomplete ?? (rows.Transient is { } t ? $"not every clip was worked out ({t.GetType().Name}: {t.Message})" : null), Faults = Faults, Transient = Transient ?? rows.Transient };
+    }
+
+    /// <summary>Whether a key is a forge clip's (its ID) rather than a file row's (<see cref="ClipEntry.Key"/>).</summary>
+    internal static bool IsForgeKey(ulong key) => (key >> 63) == 0;
 
     /// <summary>Whether the clip allows at least one edit, or null when it wasn't worked out.</summary>
     public bool? Any(ClipEntry c) => MaskFor(c) is byte m ? m != 0 : null;
@@ -173,7 +187,7 @@ public sealed class EditMarksCache(string folder)
         outcome = CacheOutcome.Built;
         string file = FileFor(g);
         if (!File.Exists(file)) return null;
-        switch (TryRead(file, EditMarksFingerprint.Of(g), g.Clips.Select(c => c.Id).ToHashSet(), out var marks))
+        switch (TryRead(file, EditMarksFingerprint.Of(g), g.ForgeClips.Select(c => c.Id).ToHashSet(), out var marks))
         {
             case ReadResult.Ok: outcome = CacheOutcome.Reused; return new CachedEditMarks(marks!, outcome, sw.Elapsed, null);
             case ReadResult.OtherFingerprint: outcome = CacheOutcome.RebuiltChanged; return null;
@@ -189,7 +203,8 @@ public sealed class EditMarksCache(string folder)
     public CachedEditMarks Save(GameInstall g, EditMarksFingerprint fp, EditMarks marks, CacheOutcome outcome, TimeSpan time)
     {
         string? saveError = marks.Incomplete is { } why ? $"they may not hold next time: {why}"
-            : marks.Count + marks.Unknown.Count != g.Clips.Select(c => c.Id).Distinct().Count() || g.Clips.Any(c => marks.MaskFor(c) is null && !marks.Unknown.Contains(c.Id))
+            : marks.Masks.Keys.Count(EditMarks.IsForgeKey) + marks.Unknown.Count(EditMarks.IsForgeKey) != g.ForgeClips.Select(c => c.Id).Distinct().Count()
+                || g.ForgeClips.Any(c => marks.MaskFor(c) is null && !marks.Unknown.Contains(c.Id))
                 ? "they don't cover every clip in the game files"
             : null;
         if (saveError is null)
@@ -270,7 +285,8 @@ public sealed class EditMarksCache(string folder)
         w.WriteString("method", fp.Method);
         w.WriteEndObject();
         w.WriteStartArray("clips");
-        foreach (var (id, mask) in marks.Masks.Select(k => (k.Key, (int)k.Value)).Concat(marks.Unknown.Select(id => (id, -1))).OrderBy(k => k.Item1))
+        // the forge's clips only: a file row's marks follow the unpacked folder, which the fingerprint doesn't cover
+        foreach (var (id, mask) in marks.Masks.Select(k => (k.Key, (int)k.Value)).Concat(marks.Unknown.Select(id => (id, -1))).Where(k => EditMarks.IsForgeKey(k.Item1)).OrderBy(k => k.Item1))
         {
             w.WriteStartArray();
             w.WriteNumberValue(id);

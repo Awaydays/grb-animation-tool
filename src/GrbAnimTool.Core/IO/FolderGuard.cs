@@ -11,17 +11,19 @@ namespace GrbAnimTool.Core.IO;
 /// sides are compared as canonical places, case ignored as on Windows:
 /// <list type="bullet">
 /// <item>the spelling: the full path with any <c>\\?\</c> prefix taken off, and an administrative share of this computer
-/// (<c>\\localhost\D$\...</c>, also by its name, any of its addresses or a 127.x.x.x address) turned back into its drive;</item>
+/// (<c>\\localhost\D$\...</c>, also by its name, any of its addresses or a 127.x.x.x address) turned back into its drive; as a share the
+/// user made may be named like one, such a path is also checked as given, over the share;</item>
 /// <item>the final path: the path and each existing folder above it is opened and asked for its final path, which follows every junction
 /// and symbolic link and also a <c>subst</c> drive (its letter only names a folder of another volume, and the opened folder's final path
 /// is on that volume) and an 8.3 short name; the part of the path that doesn't exist yet is added to it;</item>
 /// <item>the identity: the path and each existing folder above it is compared with each protected folder by volume serial number and
-/// file ID, which also holds through a network share that leads back to this computer. A folder opened over a share that has the
-/// volume serial number of a protected folder on this computer is also opened on that volume by its file ID, and its final path there
-/// compared: a share
-/// (or a drive letter mapped to one) whose root lies inside a protected folder never passes through the folder itself.</item>
+/// file ID, which also holds through a network share that leads back to this computer. A folder opened over a share whose volume
+/// serial number is a local volume's is also opened on that volume by its file ID, and its final path there and each folder above it
+/// compared by spelling and identity, whatever name the share was reached by: a share (or a drive letter mapped to one) whose root lies
+/// inside a protected folder never passes through the folder itself.</item>
 /// </list>
-/// It fails closed: an existing folder on the path that can't be opened, or whose final path can't be read, refuses the path, and so do
+/// It fails closed: an existing folder on the path that can't be opened, or whose final path can't be read, refuses the path, as does a
+/// folder over a share whose place on this computer can't be had (the share gives no file IDs, say), and so do
 /// forms a file to write never needs: a device path (<c>\\.\...</c>), an NT namespace path (<c>\??\</c>, <c>\\?\GLOBALROOT\</c>,
 /// <c>\\?\Volume{...}\</c>), and a <c>:</c> after the drive, which names a stream of a file or folder (<c>folder:name</c>,
 /// <c>folder::$INDEX_ALLOCATION</c>). Folders are opened by their <c>\\?\</c> path, so a path over 260 characters is checked too.</summary>
@@ -47,6 +49,15 @@ static partial class FolderGuard
         string full = Canonical(path);
         if (Hit(full, guards) is { } g) return In(g);
         if (!OperatingSystem.IsWindows()) return null;
+        var volumes = new Lazy<List<(string Root, ulong Serial)>?>(LocalVolumes);
+        // the path as given too: a share named like an administrative one (X$) may be one the user made, rooted anywhere
+        string given = Canonical(path, adminShares: false);
+        return Walk(full, guards, volumes) ?? (given.Equals(full, StringComparison.OrdinalIgnoreCase) ? null : Walk(given, guards, volumes));
+    }
+
+    /// <summary>The checks of <see cref="Refusal"/> on each existing folder of <paramref name="full"/>, from the deepest up.</summary>
+    static string? Walk(string full, List<Place> guards, Lazy<List<(string Root, ulong Serial)>?> volumes)
+    {
         for (string? d = full; d is not null; d = Path.GetDirectoryName(d))
         {
             // the folders that exist on the path, and the path itself when it is an existing file (a file link is followed by a write)
@@ -57,30 +68,11 @@ static partial class FolderGuard
             string rest = Path.GetRelativePath(d, full);
             string there = Canonical(rest == "." ? f : Path.Join(f, rest));
             if (Hit(there, guards) is { } g2) return In(g2) + $" ({d} leads to {Canonical(f)})";
-            if (Identity(h) is not { } id) continue;
-            if (guards.FirstOrDefault(x => x.Id == id) is { } g3) return In(g3) + $" ({d} is that folder)";
+            var id = Identity(h);
+            if (id is { } i && guards.FirstOrDefault(x => x.Id is { } gi && Same(gi, i)) is { } g3) return In(g3) + $" ({d} is that folder)";
             // a share's root may lie inside a protected folder, and the walk ends at that root without meeting the folder itself
-            if (f.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) && OverShare(d, id, guards) is { } shared) return shared;
-        }
-        return null;
-    }
-
-    /// <summary>Why <paramref name="d"/>, a folder opened over a network share whose identity is <paramref name="id"/>, is refused: it
-    /// stands on the volume of a protected folder on this computer (the same volume serial number, so the share leads back here), and
-    /// opened there by its file ID its final path lies in a protected folder, or can't be read (it fails closed); or null
-    /// (<see cref="ShareRefusal"/>).</summary>
-    static string? OverShare(string d, (ulong Volume, UInt128 File) id, List<Place> guards)
-    {
-        // every protected folder on that volume, the ones on a local drive first
-        foreach (var g in guards.Where(x => x.Id?.Volume == id.Volume).OrderBy(x => UncHost(x.Spellings[^1]) is null ? 0 : 1))
-        {
-            var why = ShareRefusal(d, g, guards, () =>
-            {
-                using var volume = Open(g.Spellings[0], out _);
-                using var local = volume is null ? null : OpenById(volume, id.File);
-                return local is null ? null : FinalPath(local);
-            });
-            if (why is not null) return why;
+            if (f.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)
+                && ShareRefusal(d, id, guards, volumes.Value, root => Here(root, id!.Value.File)) is { } shared) return shared;
         }
         return null;
     }
@@ -96,19 +88,84 @@ static partial class FolderGuard
         return end < 0 ? rest : rest[..end];
     }
 
-    /// <summary>What <see cref="OverShare"/> decides for <paramref name="d"/>, on the volume of the protected folder <paramref name="g"/>:
-    /// <paramref name="where"/> gives <paramref name="d"/>'s final path there, opened by its file ID (null: it couldn't be read). Only a
-    /// protected folder on this computer is looked for so: one on a share of another computer (a NAS) refuses nothing here, as the
-    /// walk's own checks already matched it, and a folder elsewhere on that volume can't be opened by its ID through another share. One
-    /// reached through a share of this computer is looked for as a local one is, and fails closed when it can't be read.</summary>
-    internal static string? ShareRefusal(string d, Place g, List<Place> guards, Func<string?> where)
+    /// <summary>Why <paramref name="d"/>, a folder opened over a network share whose identity is <paramref name="id"/>, is refused, by
+    /// where it stands on this computer, whatever name the share was reached by: for each local volume of <paramref name="volumes"/> with
+    /// its volume serial number (the share leads back here), <paramref name="here"/> opens it on that volume's root by its file ID and
+    /// gives its local final path and each folder above it, with their identities (null: it couldn't be opened or read). It is refused
+    /// when one of them is, or lies in, a protected folder by spelling or by identity (a protected folder opened through a share of this
+    /// computer has its local identity), and it fails closed when the answer can't be had: the share gives no file IDs, a protected folder
+    /// on a share gives none, the local volumes couldn't be listed (<paramref name="volumes"/> null) or the place there couldn't be read.
+    /// A share whose volume serial is no local volume's is another computer's (a NAS) and refuses nothing here, as the walk's own checks
+    /// already matched it.</summary>
+    internal static string? ShareRefusal(string d, (ulong Volume, UInt128 File)? id, List<Place> guards, List<(string Root, ulong Serial)>? volumes,
+        Func<string, List<(string Path, (ulong Volume, UInt128 File)? Id)>?> here)
     {
-        // shortcut: a share of this computer named by a host IsThisComputer doesn't know (a DNS alias) is taken for another computer's
-        if (UncHost(g.Spellings[^1]) is { } host && !IsThisComputer(host)) return null;
-        if (where() is not { } f)
-            return $"{d} is on a network share and on the same volume as {g.Given}, a folder the tool only reads, and where it stands on this computer couldn't be read: choose the folder by its drive path";
-        string there = Canonical(f);
-        return Hit(there, guards) is { } g2 ? In(g2) + $" ({d} is {there} on this computer)" : null;
+        const string Way = "choose the folder by its drive path";
+        if (id is not { } i)
+            return $"{d} is on a network share that gives no file IDs, so whether it leads into a folder the tool only reads couldn't be checked: {Way}";
+        // an existing protected folder (its final path read) on a share without file IDs can't be matched by identity
+        if (guards.FirstOrDefault(g => g.Id is null && g.Spellings.Count > 1 && UncHost(g.Spellings[^1]) is not null) is { } blind)
+            return $"{blind.Given}, a folder the tool only reads, is on a network share that gives no file IDs, so whether {d} leads into it couldn't be checked: {Way}, or give {blind.Given} by its drive path";
+        if (volumes is null)
+            return $"{d} is on a network share, and the volumes of this computer couldn't be listed to check where it stands: {Way}";
+        foreach (var (root, _) in volumes.Where(v => SameVolume(v.Serial, i.Volume)))
+        {
+            if (here(root) is not { Count: > 0 } chain)
+                return $"{d} is on a network share on a volume of this computer, and where it stands on this computer couldn't be read: {Way}";
+            foreach (var (p, pid) in chain)
+                if ((Hit(p, guards) ?? guards.FirstOrDefault(g => g.Id is { } gi && pid is { } x && Same(gi, x))) is { } g)
+                    return In(g) + $" ({d} is {chain[0].Path} on this computer)";
+        }
+        return null;
+    }
+
+    /// <summary>Whether two identities are the same file: the same file ID on the same volume (<see cref="SameVolume"/>).</summary>
+    static bool Same((ulong Volume, UInt128 File) a, (ulong Volume, UInt128 File) b) => a.File == b.File && SameVolume(a.Volume, b.Volume);
+
+    /// <summary>Whether two volume serial numbers are one volume's: equal, or one of them only 32 bits (as
+    /// GetFileInformationByHandle gives it) and equal to the other's low 32 bits.</summary>
+    static bool SameVolume(ulong a, ulong b) => a == b || (a >> 32 == 0 || b >> 32 == 0) && (uint)a == (uint)b;
+
+    /// <summary>The folder or file of <paramref name="file"/> on the local volume <paramref name="root"/> (<c>\\?\Volume{...}\</c>),
+    /// opened by that ID: its canonical final path and each folder above it, with their identities; null when any of them couldn't be
+    /// opened or the final path couldn't be read.</summary>
+    internal static List<(string Path, (ulong Volume, UInt128 File)? Id)>? Here(string root, UInt128 file)
+    {
+        using var volume = Open(root, out _);
+        using var h = volume is null ? null : OpenById(volume, file);
+        if (h is null || FinalPath(h) is not { } f) return null;
+        var chain = new List<(string, (ulong, UInt128)?)>();
+        for (string? t = Canonical(f); t is not null; t = Path.GetDirectoryName(t))
+        {
+            using var th = Open(t, out _);
+            if (th is null) return null;
+            chain.Add((t, Identity(th)));
+        }
+        return chain;
+    }
+
+    /// <summary>Each local volume's root (<c>\\?\Volume{...}\</c>) and volume serial number; a volume that can't be opened (a drive
+    /// without its medium) is left out. Null when the volumes can't be listed.</summary>
+    internal static List<(string Root, ulong Serial)>? LocalVolumes()
+    {
+        var name = new char[300];
+        nint find = FindFirstVolumeW(name, (uint)name.Length);
+        if (find == -1) return null;
+        var l = new List<(string, ulong)>();
+        try
+        {
+            do
+            {
+                int n = Array.IndexOf(name, '\0');
+                if (n <= 0) continue;
+                string root = new(name, 0, n);
+                using var h = Open(root, out _);
+                if (h is not null && Identity(h) is { } id) l.Add((root, id.Volume));
+            }
+            while (FindNextVolumeW(find, name, (uint)name.Length));
+        }
+        finally { FindVolumeClose(find); }
+        return l;
     }
 
     /// <summary>How many of the game's own clip files make a folder an unpacked datafile's (see
@@ -241,7 +298,7 @@ static partial class FolderGuard
             }
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }   // the form guard says why
-        const string What = "a package this tool built, or a local undo folder a pre-release build of it wrote";
+        const string What = "a package this tool built, or a local undo folder an earlier version of it wrote";
         bool Build(string d) => !skip.Contains(d) && Package.PackageBuild.IsEarlierBuild(d);
         string? deepest = null;
         for (string? d = full; d is not null; d = Path.GetDirectoryName(d))
@@ -502,8 +559,8 @@ static partial class FolderGuard
     }
 
     /// <summary>A path's full spelling without a <c>\\?\</c> or <c>\\.\</c> prefix before a drive, an administrative share of this
-    /// computer as its drive, and no separator at the end.</summary>
-    internal static string Canonical(string path)
+    /// computer as its drive (unless <paramref name="adminShares"/> is false), and no separator at the end.</summary>
+    internal static string Canonical(string path, bool adminShares = true)
     {
         string p = Path.GetFullPath(path);
         for (int round = 0; round < 4; round++)
@@ -512,7 +569,7 @@ static partial class FolderGuard
             if (q.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) q = @"\\" + q[8..];
             else if ((q.StartsWith(@"\\?\", StringComparison.Ordinal) || q.StartsWith(@"\\.\", StringComparison.Ordinal)) && q.Length >= 6 && q[5] == ':')
                 q = q[4..];
-            q = AdminShare(q);
+            if (adminShares) q = AdminShare(q);
             if (q == p) break;
             p = Path.GetFullPath(q);
         }
@@ -523,7 +580,12 @@ static partial class FolderGuard
     /// this computer is caught by the identity check alone (as a share the spelling can't tell is this computer's would be).</summary>
     [ThreadStatic] internal static bool SharesUnmappedForTest;
 
-    /// <summary><c>\\host\X$\rest</c> as <c>X:\rest</c> when the host is this computer.</summary>
+    /// <summary>For the tests, on their own thread only: when set, an administrative-share spelling is read as this drive instead of its
+    /// own, as a share the user made and named like one (<c>Q$</c>, rooted in some folder) would be misread.</summary>
+    [ThreadStatic] internal static char AdminShareDriveForTest;
+
+    /// <summary><c>\\host\X$\rest</c> as <c>X:\rest</c> when the host is this computer. Only a spelling: a share the user made may be
+    /// named so too, so <see cref="Refusal"/> also checks the path as given.</summary>
     static string AdminShare(string p)
     {
         if (SharesUnmappedForTest) return p;
@@ -536,7 +598,7 @@ static partial class FolderGuard
         if (!IsThisComputer(host) || !char.IsAsciiLetter(drive) || p[hostEnd + 2] != '$') return p;
         string rest = hostEnd + 3 < p.Length ? p[(hostEnd + 3)..] : "";
         if (rest.Length > 0 && rest[0] != '\\') return p;
-        return $"{char.ToUpperInvariant(drive)}:\\" + rest.TrimStart('\\');
+        return $"{char.ToUpperInvariant(AdminShareDriveForTest != '\0' ? AdminShareDriveForTest : drive)}:\\" + rest.TrimStart('\\');
     }
 
     /// <summary>Whether a share's host names this computer: localhost, its names, any loopback address (127.x.x.x, ::1, in any form
@@ -631,14 +693,28 @@ static partial class FolderGuard
         return null;
     }
 
-    /// <summary>The volume serial number and 128-bit file ID (FILE_ID_INFO), or null where the file system gives none.</summary>
-    static (ulong, UInt128)? Identity(SafeFileHandle h)
+    /// <summary>The identity of an existing file or folder (<see cref="Identity(SafeFileHandle)"/>); null when it can't be opened.</summary>
+    internal static (ulong Volume, UInt128 File)? Identity(string path)
+    {
+        using var h = Open(path, out _);
+        return h is null ? null : Identity(h);
+    }
+
+    /// <summary>The volume serial number and 128-bit file ID (FILE_ID_INFO); where the file system or the share gives none, the 32-bit
+    /// serial and 64-bit file index of GetFileInformationByHandle; null where neither is given (a file ID of zero is none).</summary>
+    static (ulong Volume, UInt128 File)? Identity(SafeFileHandle h)
     {
         var info = new byte[24];
-        if (!GetFileInformationByHandleEx(h, FileIdInfo, info, (uint)info.Length)) return null;
-        ulong volume = BitConverter.ToUInt64(info, 0);
-        var file = new UInt128(BitConverter.ToUInt64(info, 16), BitConverter.ToUInt64(info, 8));
-        return (volume, file);
+        if (GetFileInformationByHandleEx(h, FileIdInfo, info, (uint)info.Length))
+        {
+            var file = new UInt128(BitConverter.ToUInt64(info, 16), BitConverter.ToUInt64(info, 8));
+            if (file != 0) return (BitConverter.ToUInt64(info, 0), file);
+        }
+        // BY_HANDLE_FILE_INFORMATION: the serial at 28, the index's high and low halves at 44 and 48
+        var b = new byte[52];
+        if (!GetFileInformationByHandle(h, b)) return null;
+        ulong index = (ulong)BitConverter.ToUInt32(b, 44) << 32 | BitConverter.ToUInt32(b, 48);
+        return index == 0 ? null : (BitConverter.ToUInt32(b, 28), index);
     }
 
     /// <summary>A handle, for its attributes only, to the file or folder of a file ID on the volume <paramref name="volume"/> is open
@@ -669,4 +745,19 @@ static partial class FolderGuard
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileInformationByHandleEx(SafeFileHandle h, int infoClass, [Out] byte[] info, uint size);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandle(SafeFileHandle h, [Out] byte[] info);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint FindFirstVolumeW([Out] char[] name, uint length);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool FindNextVolumeW(nint find, [Out] char[] name, uint length);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool FindVolumeClose(nint find);
 }

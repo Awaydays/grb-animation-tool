@@ -64,6 +64,10 @@ public sealed class ImportResult
     public required IReadOnlyList<TrackFate> Fates { get; init; }
     /// <summary>The ticks between keys of a written curve: 1, or the keying rule's step for a long slot.</summary>
     public required int KeyStep { get; init; }
+    /// <summary>How the source was fitted to the slot (its length, the loop, the root), or null for an import of the slot's length as it is.</summary>
+    public FitResult? Fit { get; init; }
+    /// <summary>The source's motion at its own length, before the fit (the cut's suggestion is made on it).</summary>
+    public Motion? Unfitted { get; init; }
 
     public int Written => Fates.Count(f => f.Written);
     public int Kept => Fates.Count(f => !f.Written);
@@ -97,6 +101,9 @@ public sealed class ImportResult
 /// whose answer isn't known), motion the slot can't hold, and the motion checks.</para></summary>
 public static class ClipImport
 {
+    /// <summary>A written track's note when the source has no track for it: it holds the skeleton's rest pose.</summary>
+    public const string FilledNote = "; the source has no track for it: filled with the skeleton's rest pose";
+
     /// <summary>A track is left as the game had it when the file's values match it at every tick within these, plus
     /// <see cref="SameStepShare"/> of the track's own step from that tick to its neighbours.</summary>
     public const double SameDeg = 0.01, SameCm = 0.01;
@@ -121,7 +128,7 @@ public static class ClipImport
 
     /// <summary>Imports <paramref name="glbPath"/> into <paramref name="slot"/> of <paramref name="g"/>, with the motion-field verdict of
     /// <paramref name="graph"/> when given.</summary>
-    public static ImportResult Run(GameInstall g, ClipEntry slot, string glbPath, ClipGraph? graph = null)
+    public static ImportResult Run(GameInstall g, ClipEntry slot, string glbPath, ClipGraph? graph = null, FitOptions? fit = null)
     {
         byte[] bytes;
         try
@@ -132,21 +139,24 @@ public static class ClipImport
             bytes = File.ReadAllBytes(glbPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new ImportRefusedException($"{glbPath} can't be read: {ex.Message}", ImportRefusal.File, ex); }
-        return Run(g.Skeleton, g.SharedTable, slot, bytes, Path.GetFullPath(glbPath), graph?.Verdict(slot.Id), graph is not null);
+        return Run(g.Skeleton, g.SharedTable, slot, bytes, Path.GetFullPath(glbPath), graph?.Verdict(slot.Id), graph is not null, fit);
     }
 
     /// <summary>Imports a .glb's bytes; a file that can't be read as a glTF binary is refused (<see cref="ImportRefusal.File"/>).</summary>
-    public static ImportResult Run(Skeleton s, SharedCurveTable? table, ClipEntry slot, byte[] glb, string source, ClipGraphVerdict? verdict = null, bool graphRead = false)
+    public static ImportResult Run(Skeleton s, SharedCurveTable? table, ClipEntry slot, byte[] glb, string source, ClipGraphVerdict? verdict = null, bool graphRead = false,
+        FitOptions? fit = null)
     {
         GlbScene scene;
         try { scene = GlbScene.Read(glb); }
         catch (InvalidDataException ex) { throw new ImportRefusedException($"{Path.GetFileName(source)} can't be read as a glTF binary: {ex.Message}.", ImportRefusal.File, ex); }
-        return Run(s, table, slot, scene, source, Sha256Hex.Of(glb), verdict, graphRead);
+        return Run(s, table, slot, scene, source, Sha256Hex.Of(glb), verdict, graphRead, fit);
     }
 
-    /// <summary>The import itself, on any skeleton and shared table (the tests' synthetic ones too).</summary>
+    /// <summary>The import itself, on any skeleton and shared table (the tests' synthetic ones too). Without <paramref name="fit"/> the file
+    /// must last exactly as long as the slot; with it, a file of another length is fitted to the slot's (<see cref="ClipFit"/>), and the
+    /// loop and root-motion options apply.</summary>
     public static ImportResult Run(Skeleton s, SharedCurveTable? table, ClipEntry slot, GlbScene scene, string source, string sourceSha256,
-        ClipGraphVerdict? verdict = null, bool graphRead = false)
+        ClipGraphVerdict? verdict = null, bool graphRead = false, FitOptions? fit = null)
     {
         var rec = slot.Record ?? throw new ImportRefusedException($"{slot.Name}'s record can't be read ({slot.ParseError}), so nothing can be imported into it.", ImportRefusal.Slot);
         if (!rec.WalkedToEnd) throw new ImportRefusedException($"{slot.Name}'s curves don't read to the record's end ({rec.Stop}), so it can't be rebuilt.", ImportRefusal.Slot);
@@ -222,10 +232,10 @@ public static class ClipImport
         double ticks = (end - start) * ClipRecord.TicksPerSecond;
         int got = (int)Math.Round(ticks);
         string rate = FrameRateHint(chans);
-        if (got != last || Math.Abs(ticks - got) > 0.05)
+        if ((got != last && fit is null) || Math.Abs(ticks - got) > 0.05)
             throw new ImportRefusedException(FormattableString.Invariant($"the animation lasts {end - start:F3} s ({ticks:F2} ticks at 60 a second); {slot.Name} lasts {rec.Duration:F3} s ({last} ticks). ")
-                + $"An import must last exactly as long as the clip it replaces: at 60 frames a second, from frame 0 to frame {last}.{rate}", ImportRefusal.Length);
-        report.Add(MotionChecks.Length(got, last));
+                + $"An import must last exactly as long as the clip it replaces, at 60 frames a second, from frame 0 to frame {last}, or use Fit to cut, stretch or hold it.{rate}", ImportRefusal.Length);
+        if (fit is null) report.Add(MotionChecks.Length(got, last));
         bool offGrid = chans.Any(c => c.Times.Any(t => Math.Abs((t - start) * 60 - Math.Round((t - start) * 60)) > 0.01));
         if (start > 1e-4 || offGrid)
             report.Add(new CheckResult("key times", CheckLevel.Warn, (start > 1e-4 ? FormattableString.Invariant($"the animation starts at {start:F3} s, taken as the clip's tick 0; ") : "")
@@ -243,8 +253,9 @@ public static class ClipImport
             var r = byNodePath.TryGetValue((node, "rotation"), out var cr) ? Q4(cr.At(sec)) : nd.Rotation;
             return (t, r);
         }
-        var fileLocals = new Transform[last + 1][];
-        var fileMover = new Transform[last + 1];
+        // the file at its own length: the slot's, unless it is fitted below
+        var fileLocals = new Transform[got + 1][];
+        var fileMover = new Transform[got + 1];
         var rk = new bool[n];
         var pk = new bool[n];
         for (int b = 0; b < n; b++)
@@ -252,7 +263,7 @@ public static class ClipImport
             rk[b] = byNodePath.ContainsKey((boneNode[b], "rotation"));
             pk[b] = byNodePath.ContainsKey((boneNode[b], "translation"));
         }
-        for (int t = 0; t <= last; t++)
+        for (int t = 0; t <= got; t++)
         {
             double sec = start + t / (double)ClipRecord.TicksPerSecond;
             var l = new Transform[n];
@@ -272,6 +283,55 @@ public static class ClipImport
             fileMover[t] = new Transform(GltfAxes.FromGltf(w.Position), GltfAxes.FromGltf(w.Rotation));
         }
         var fromFile = new Motion(s, fileLocals, fileMover, rk, pk, hasMover: true);
+        FitResult? fitted = null;
+        if (fit is not null)
+        {
+            try { fitted = ClipFit.Apply(fromFile, last, fit); }
+            catch (ArgumentException ex) { throw new ImportRefusedException(ex.Message, ImportRefusal.Length, ex); }
+            report.Add(FitCheck(fitted, got, last));
+        }
+        return Write(s, table, slot, report, fitted?.Motion ?? fromFile, source, sourceSha256, verdict, graphRead, fitted, fromFile);
+    }
+
+    /// <summary>The report's line on the fit: what was done to the source's length, the loop and the root; a warning when it now plays
+    /// at another speed, or the loop leaves a root that moves alone.</summary>
+    internal static CheckResult FitCheck(FitResult f, int sourceLast, int last)
+    {
+        string head = sourceLast == last ? $"the source lasts {last} ticks, as the clip does: no fit step" : $"the source lasts {sourceLast} ticks, the clip {last}";
+        var level = f.PlaysAtOtherSpeed || (f.BlendFrom is not null && f.RootMoves) ? CheckLevel.Warn : CheckLevel.Pass;
+        return new CheckResult("fit", level, string.Join("; ", f.Notes.Prepend(head)) + "; the clip keeps its exact length, so its record keeps its structure");
+    }
+
+    /// <summary>Whether the clip's byte array holds the foot-sync track: a block of the fixed track ID <c>FFFFFFA0</c> (the block word, the
+    /// ID's low byte, then <c>FF FF FF</c>).</summary>
+    internal static bool HoldsFootSync(ClipRecord rec) =>
+        ByteArrayTimes.Lists(rec, out _).Any(l => l.BlockAt + 6 < rec.Bytes.Length && rec.Bytes[l.BlockAt + 6] == 0xA0);
+
+    /// <summary>A motion as arrays of every frame: each bone's local transform and the mover.</summary>
+    static (Transform[][] Locals, Transform[] Mover) Arrays(Motion m)
+    {
+        var l = new Transform[m.Frames][];
+        var mv = new Transform[m.Frames];
+        for (int t = 0; t < m.Frames; t++)
+        {
+            l[t] = new Transform[m.Skeleton.Bones.Count];
+            for (int b = 0; b < l[t].Length; b++) l[t][b] = m.Local(t, b);
+            mv[t] = m.Mover(t);
+        }
+        return (l, mv);
+    }
+
+    /// <summary>Writes <paramref name="fromFile"/> (a motion of the slot's exact length, every bone and the mover, from a file or another
+    /// clip) into the slot's record: each bone rotation and position track and the mover's that it changes is written, everything else
+    /// (events, non-bone tracks, hand tracks, helpers, tracks it leaves as they were) keeps the slot's own bytes; then the checks.</summary>
+    internal static ImportResult Write(Skeleton s, SharedCurveTable? table, ClipEntry slot, CheckReport report, Motion fromFile, string source, string sourceSha256,
+        ClipGraphVerdict? verdict, bool graphRead, FitResult? fitted, Motion? unfitted = null)
+    {
+        var rec = slot.Record!;
+        int last = rec.LastTick;
+        int n = s.Bones.Count;
+        if (fromFile.LastTick != last) throw new ArgumentException($"the motion lasts {fromFile.LastTick} ticks, not the slot's {last}");
+        var (fileLocals, fileMover) = Arrays(fromFile);
 
         Motion game;
         try { game = Motion.FromClip(s, rec, table); }
@@ -355,7 +415,8 @@ public static class ClipImport
                 bool twelve = !has5 && has7;
                 if (twelve && kt.Length > 1) twelveMulti.Add(name);
                 curves[i] = twelve ? CurveWriter.RotCurve12(kt, kv) : CurveWriter.RotCurve(kt, kv);
-                fates.Add(new TrackFate(i, h, name, kind, true, FormattableString.Invariant($"written, {kt.Length} key(s), {(twelve ? "12" : "6")}-byte form (the game's tag 0x{u.Tag:X2}, {u.Keys} keys); up to {diff:F2} deg from the game's")));
+                fates.Add(new TrackFate(i, h, name, kind, true, FormattableString.Invariant($"written, {kt.Length} key(s), {(twelve ? "12" : "6")}-byte form (the game's tag 0x{u.Tag:X2}, {u.Keys} keys); up to {diff:F2} deg from the game's")
+                    + (fitted is not null && (h == 0 ? !fromFile.HasMover : !fromFile.RotationKeyed[b]) ? FilledNote : "")));
                 if (h == 0) moverRotWritten = true; else writtenRot[b] = true;
             }
             else
@@ -375,7 +436,8 @@ public static class ClipImport
                 int[] kt = still ? [0] : step == 1 ? keyTicks
                     : Placed(name, keyTicks, (a, z, t) => Vector3.Distance(Vector3.Lerp(v[a], v[z], (t - a) / (float)(z - a)), v[t]) * 100, "cm", placed);
                 curves[i] = CurveWriter.PosCurve(kt, kt.Select(t => v[t]).ToList());
-                fates.Add(new TrackFate(i, h, name, kind, true, FormattableString.Invariant($"written, {kt.Length} key(s) (the game's tag 0x{u.Tag:X2}, {u.Keys} keys); up to {diff:F2} cm from the game's")));
+                fates.Add(new TrackFate(i, h, name, kind, true, FormattableString.Invariant($"written, {kt.Length} key(s) (the game's tag 0x{u.Tag:X2}, {u.Keys} keys); up to {diff:F2} cm from the game's")
+                    + (fitted is not null && (h == 0 ? !fromFile.HasMover : !fromFile.PositionKeyed[b]) ? FilledNote : "")));
                 if (h == 0) moverPosWritten = true; else writtenPos[b] = true;
             }
         }
@@ -430,11 +492,15 @@ public static class ClipImport
         report.Add(MotionChecks.Plants(written, game, Plants(rec, table)));
         report.Add(Dropped(fromFile, expected, s, rec, table));
         report.Add(MotionField(verdict, graphRead));
+        // a fitted motion (a replace, or an import of another length) on a clip whose steps the game lines blends up by
+        if (fitted is not null && HoldsFootSync(rec))
+            report.Add(new CheckResult("foot sync", CheckLevel.Warn, "this clip holds foot-sync markers (track FFFFFFA0), which the game lines up blends between "
+                + "walking and running clips by; they stay as the clip had them, so where the new motion's steps fall elsewhere, a blend into or out of it may slide"));
 
         return new ImportResult
         {
             Slot = slot, Source = source, SourceSha256 = sourceSha256, Rebuilt = built, Report = report, Game = game, Imported = written, FromFile = fromFile,
-            Fates = fates, KeyStep = step,
+            Fates = fates, KeyStep = step, Fit = fitted, Unfitted = unfitted ?? fromFile,
         };
     }
 

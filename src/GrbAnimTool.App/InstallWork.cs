@@ -175,10 +175,18 @@ static class InstallWork
                             // errors themselves were logged then)
                             if (kept.Marks.Unknown.Count > 0 && Told(g))
                             {
-                                var names = g.Clips.Where(c => kept.Marks.Unknown.Contains(c.Id)).Select(c => c.Name).Order(StringComparer.Ordinal).ToList();
+                                var names = g.ForgeClips.Where(c => kept.Marks.Unknown.Contains(c.Key)).Select(c => c.Name).Order(StringComparer.Ordinal).ToList();
                                 App.LogNote("while reading which edits each clip allows from the cache",
                                     $"the tool failed on {names.Count:N0} clip(s) when they were worked out, so which edits they allow isn't known: "
                                     + string.Join(", ", names.Take(20)) + (names.Count > 20 ? ", ..." : ""), counts: true);
+                            }
+                            // the unpacked folder's own files aren't in the cache: worked out now, each by its own record
+                            var files = g.Clips.Where(c => c.FromFile).ToList();
+                            if (files.Count > 0)
+                            {
+                                await Task.WhenAll(graph, swaps, mirror);
+                                var rows = await Task.Run(() => InstallEditChoices.Of(g, graph.Result, swaps.Result, mirror.Result, run.Token, only: files));
+                                return new MarksResult(kept.Marks.With(rows), kept.Outcome, sw.Elapsed, null, null);
                             }
                             return new MarksResult(kept.Marks, kept.Outcome, sw.Elapsed, null, null);
                         }

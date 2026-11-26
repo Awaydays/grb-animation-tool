@@ -40,7 +40,7 @@ static partial class Program
                 [--reencode | --curves <curveSet.json>] [--overwrite]
             Rebuilds a clip (from the game folder, or from a record file of it) with nothing replaced, with every curve of a form with a writer
             written again, or with a curve set's curves, and writes it as a record file named from the game folder's own datafile into <folder>
-            (never a folder of the game's, nor a package this tool built or a local undo folder a pre-release build of it wrote). Every
+            (never a folder of the game's, nor a package this tool built or a local undo folder an earlier version of it wrote). Every
             command that writes a file refuses one inside such a package or local undo folder too.
         grbanim-cli import <gameFolder> [--forge <patchForge>] --glb <file> --clip <name | 0xID> --out <folder> [--report <folder>] [--overwrite]
                 [--allow-unchanged]
@@ -51,6 +51,10 @@ static partial class Program
             --allow-unchanged (for tests). Exit code 1 when the import is refused (nothing written), 3 when a check fails (the files are
             written) or, rarely, when the files were written but something after it failed: an old file they replaced (with --overwrite)
             couldn't be deleted, or the reports in --report couldn't be written (the message says which).
+        grbanim-cli replace <gameFolder> [--forge <patchForge>] --clip <name | 0xID> (--source <clip> | --glb <file>) --out <folder>
+                [--fit cut|speed|hold] [--start <frame>] [--loop <frames>] [--root-scale <x>] [--report <folder>] [--overwrite]
+            Puts another clip's motion, or a .glb's, on the clip, fitted to its exact length (a cut from --start, or from the start where
+            the loop closes best), keeping the clip's events and non-bone tracks; writes the record file and its check report as import does.
         grbanim-cli compare <gameFolder> [--forge <patchForge>] --clip <name | 0xID> --record-file <file> [--top <n>]
             Reads a record file back and compares it with the game folder's own clip: per bone, its own rotation and its place in the
             clip's world at their worst tick, the bones that differ most first, then the mover.
@@ -96,6 +100,7 @@ static partial class Program
                 "check" or "rebuild-check" => ["forge"],
                 "list" => ["forge", "search", "armed", "unarmed"],
                 "import" => ["forge", "glb", "clip", "out", "report", "overwrite", "allow-unchanged"],
+                "replace" => ["forge", "clip", "source", "glb", "fit", "start", "loop", "root-scale", "out", "report", "overwrite"],
                 "compare" => ["forge", "clip", "record-file", "top"],
                 "soak" => ["forge", "rebuild", "passes", "log", "minutes", "decode-datafile-each-pass"],
                 "hash-table" => ["game", "out"],
@@ -117,6 +122,7 @@ static partial class Program
                 "list" when pos.Count == 1 => List(pos[0], opts.GetValueOrDefault("forge"), opts.GetValueOrDefault("search") ?? "",
                     opts.ContainsKey("armed") ? true : opts.ContainsKey("unarmed") ? false : null),
                 "import" when pos.Count == 1 => Import(pos[0], opts),
+                "replace" when pos.Count == 1 => Replace(pos[0], opts),
                 "compare" when pos.Count == 1 => Compare(pos[0], opts),
                 "soak" when pos.Count == 1 && opts.ContainsKey("rebuild") => SoakRebuild(pos[0], opts),
                 "soak" when pos.Count == 1 => Soak(pos[0], opts),
@@ -242,7 +248,7 @@ static partial class Program
         if (clip is null)
         {
             var sinceRead = sw.Elapsed;
-            foreach (var l in graph.Census(g.Clips.Select(c => (c.Id, c.Duration))).Lines()) Console.WriteLine(l);
+            foreach (var l in graph.Census(g.ForgeClips.Select(c => (c.Id, c.Duration))).Lines()) Console.WriteLine(l);
             Console.WriteLine($"read in {sinceRead.TotalSeconds:F2} s");
             return graph.Complete ? 0 : 3;
         }

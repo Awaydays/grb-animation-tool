@@ -56,7 +56,7 @@ public sealed class ClipCensus
         return (kind, read);
     }
 
-    public static ClipCensus Run(GameInstall g) => Run(g.Records.Count, g.Clips, g.SharedTable);
+    public static ClipCensus Run(GameInstall g) => Run(g.Records.Count, g.ForgeClips, g.SharedTable);
 
     public static ClipCensus Run(int records, IEnumerable<ClipEntry> clips, SharedCurveTable table)
     {

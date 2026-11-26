@@ -92,7 +92,7 @@ sealed class ErrorReport
     /// other on every pass) are repeats too.</summary>
     const int RecentKinds = 32;
 
-    readonly object _gate = new();
+    readonly object _sync = new();
     readonly Dictionary<string, (DateTime At, int Repeats)> _recentKinds = [];
     int _held;
     readonly Queue<DateTime> _recent = new();
@@ -112,7 +112,7 @@ sealed class ErrorReport
     Verdict Judge(Exception inner, out int heldBefore, bool shown = true)
     {
         string key = $"{inner.GetType().FullName}|{inner.Message}|{inner.StackTrace?.Split('\n', 2)[0].Trim()}";
-        lock (_gate)
+        lock (_sync)
         {
             var now = Now();
             heldBefore = 0;
@@ -204,7 +204,7 @@ sealed class ErrorReport
             // caught (one caught here never quiets the same error escaping later)
             var inner = Inner(ex);
             string key = $"{where}|{inner.GetType().FullName}|{inner.Message}|{inner.StackTrace?.Split('\n', 2)[0].Trim()}";
-            lock (_gate)
+            lock (_sync)
             {
                 var now = Now();
                 foreach (var old in _recentCaught.Where(k => now - k.Value >= RepeatWithin).Select(k => k.Key).ToList()) _recentCaught.Remove(old);

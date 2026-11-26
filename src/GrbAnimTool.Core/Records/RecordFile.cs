@@ -179,13 +179,21 @@ public static class RecordFileWriter
         IReadOnlyList<(string Name, byte[] Content)> extraFiles, bool overwrite = false)
     {
         var items = new List<RecordFileItem>();
-        foreach (var (c, rec) in clips)
-        {
-            if (c.Index < 0 || c.Index >= install.Records.Count || install.Records[c.Index].Index != c.Index || install.Records[c.Index].Id != c.Id || install.Records[c.Index].Name != c.Name)
-                throw new RecordFileException($"{c.Name} 0x{c.Id:X16} isn't record {c.Index} of the game folder's animation datafile");
-            items.Add(new RecordFileItem(c.Index, c.Name, c.Id, rec));
-        }
+        foreach (var (c, rec) in clips) items.Add(ItemOf(install, c, rec));
         return Write(outputFolder, install.RecordFolderName, Export.ClipExport.ProtectedFolders(install), items, extraFiles, overwrite);
+    }
+
+    /// <summary>The number a row's record file is named with: a forge row's index in the datafile; a row of the unpacked folder's own
+    /// file the number its file has (1, as the players' 1_-_ files, when it has none).</summary>
+    public static int FileIndexOf(ClipEntry c) => !c.FromFile ? c.Index : c.FileNumber is int n and >= 0 ? n : 1;
+
+    /// <summary>The record file to write for <paramref name="record"/> made for <paramref name="c"/>: a forge row's must be the install's
+    /// own record of its index, name and ID (a replacement keeps its place); a file row's is named as its file is.</summary>
+    public static RecordFileItem ItemOf(GameInstall install, ClipEntry c, byte[] record)
+    {
+        if (!c.FromFile && (c.Index < 0 || c.Index >= install.Records.Count || install.Records[c.Index].Index != c.Index || install.Records[c.Index].Id != c.Id || install.Records[c.Index].Name != c.Name))
+            throw new RecordFileException($"{c.Name} 0x{c.Id:X16} isn't record {c.Index} of the game folder's animation datafile");
+        return new RecordFileItem(FileIndexOf(c), c.Name, c.Id, record);
     }
 
     /// <summary>Writes plain files (no record file) into <paramref name="folder"/> (made when missing) under the same

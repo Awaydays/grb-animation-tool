@@ -220,7 +220,7 @@ public sealed class ClipGraph
         }
     }
 
-    public static ClipGraph Read(GameInstall g) => Read(g.Records, g.Clips.Select(c => c.Id));
+    public static ClipGraph Read(GameInstall g) => Read(g.Records, g.ForgeClips.Select(c => c.Id));
 
     /// <summary>Reads every graph document among <paramref name="records"/> and finds where each of <paramref name="clipIds"/> is named.
     /// A document that doesn't read is listed in <see cref="Failures"/>; the graph is then incomplete and every verdict refuses. Only places

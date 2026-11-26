@@ -43,7 +43,7 @@ public static class RebuildPass
             sha.AppendData(buf, 0, 4 * v.Length);
         }
         var source = records is null
-            ? g.Clips.Select(e => (e.Index, e.Name, e.Bytes))
+            ? g.ForgeClips.Select(e => (e.Index, e.Name, e.Bytes))
             : records.Where(r => r.Type == ClipRecord.Type).Select(r => (r.Index, r.Name, r.Bytes));
         foreach (var e in source)
         {

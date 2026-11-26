@@ -35,6 +35,9 @@ public sealed record ClipQuery
     /// per field source, told apart by delegate equality, so a new lambda each time builds the search again.</summary>
     public Func<ClipEntry, IEnumerable<SearchField>>? Fields { get; init; }
     public StatusFilter Status { get; init; } = StatusFilter.All;
+    /// <summary>Only the rows that aren't the game's own: a modded file (<see cref="ClipEntry.Modded"/>, a 1_-_ file) and a record
+    /// changed inside the game's files (status Replaced, or Added for an ID the game lacks).</summary>
+    public bool ModdedOnly { get; init; }
     /// <summary>The family (see <see cref="FamilyOf"/>), or null for every family.</summary>
     public string? Family { get; init; }
     /// <summary>The shortest and longest clip let through, in seconds, or null for no bound.</summary>
@@ -91,6 +94,7 @@ public sealed record ClipQuery
             case StatusFilter.Added when c.Status != ClipStatus.Added:
                 return false;
         }
+        if (ModdedOnly && !c.Modded && c.Status is not (ClipStatus.Replaced or ClipStatus.Added)) return false;
         if (Family is not null && FamilyOf(c.Name) != Family) return false;
         if (MinSeconds is float lo && c.Duration < lo) return false;
         if (MaxSeconds is float hi && c.Duration > hi) return false;
@@ -109,7 +113,25 @@ public sealed record ClipQuery
     /// (<see cref="ClipSearch.For"/>); over any other sequence it is built for the call. The filters apply in the search, so a query
     /// that matches no clip they let through is tried again with typos for every word. The index's columns sort as
     /// <see cref="SortByIndex"/> says.</summary>
-    public List<ClipEntry> Apply(IEnumerable<ClipEntry> clips, ClipSort sort = ClipSort.Index, bool descending = false)
+    /// <para>The rows of one clip (a modded file and the game's own, from the unpacked folder) stay together, where the first of them falls.</para>
+    public List<ClipEntry> Apply(IEnumerable<ClipEntry> clips, ClipSort sort = ClipSort.Index, bool descending = false) => Grouped(Sorted(clips, sort, descending));
+
+    /// <summary><paramref name="list"/> with each clip's rows moved up to its first row, in their own order; the list itself when no clip
+    /// has two rows.</summary>
+    internal static List<ClipEntry> Grouped(List<ClipEntry> list)
+    {
+        if (!list.Any(c => c.FromFile)) return list;
+        var of = new Dictionary<ulong, List<ClipEntry>>();
+        var order = new List<List<ClipEntry>>();
+        foreach (var c in list)
+        {
+            if (!of.TryGetValue(c.Id, out var g)) { of[c.Id] = g = []; order.Add(g); }
+            g.Add(c);
+        }
+        return order.Count == list.Count ? list : [.. order.SelectMany(g => g)];
+    }
+
+    List<ClipEntry> Sorted(IEnumerable<ClipEntry> clips, ClipSort sort, bool descending)
     {
         List<ClipEntry> list;
         if (!ClipSearch.HasQuery(Text)) list = clips.Where(PassesFilters).ToList();

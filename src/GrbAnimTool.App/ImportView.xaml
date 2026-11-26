@@ -2,7 +2,8 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:GrbAnimTool.App"
-             xmlns:index="clr-namespace:GrbAnimTool.Core.Index;assembly=GrbAnimTool.Core">
+             xmlns:index="clr-namespace:GrbAnimTool.Core.Index;assembly=GrbAnimTool.Core"
+             xmlns:lib="clr-namespace:GrbAnimTool.Core.Library;assembly=GrbAnimTool.Core">
     <UserControl.Resources>
         <!-- the styles build on the theme's own (BasedOn), so the controls keep its look in light and dark -->
         <Style x:Key="Label" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -30,8 +31,23 @@
             <Button x:Name="ChooseGlbButton" Grid.Column="0" Content="Choose .glb..." Click="OnChooseGlb" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
                     ToolTip="A glTF binary made on the game's skeleton: the tool's own export of a clip (or of the skeleton), edited or animated in any tool that reads and writes glTF, and exported at 60 frames a second." />
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="4,0">
-                <TextBlock x:Name="GlbText" Text="Open your game folder on the Library screen first." TextTrimming="CharacterEllipsis" />
+                <StackPanel Orientation="Horizontal">
+                    <local:HelpButton x:Name="ImportHelp" Heading="Import" Text="{x:Static lib:HelpTexts.Import}" Margin="0,0,6,0" />
+                    <TextBlock x:Name="GlbText" Text="Open your game folder on the Library screen first." TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                </StackPanel>
                 <TextBlock x:Name="GlbInfo" Foreground="{DynamicResource Grb.TextSecondary}" TextTrimming="CharacterEllipsis" />
+                <!-- a file of another length than the clip: how to fit it (else the import keeps its exact-length path) -->
+                <WrapPanel x:Name="FitRow" Visibility="Collapsed" Margin="0,2,0,0">
+                    <TextBlock Text="Fit" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <local:HelpButton x:Name="FitHelp" Heading="Fit" Text="{x:Static lib:HelpTexts.Fit}" />
+                    <RadioButton x:Name="CutChoice" GroupName="ImportFit" Content="Cut" IsChecked="True" Margin="0,0,8,0" VerticalAlignment="Center" Checked="OnFitChanged" />
+                    <TextBlock Text="from frame" Style="{StaticResource Label}" VerticalAlignment="Center" />
+                    <local:NumberBox x:Name="CutStartBox" Width="56" Margin="0,0,10,0" ToolTip="Empty: the start where the loop closes best is suggested and used" TextChanged="OnFitTextChanged" />
+                    <RadioButton x:Name="StretchChoice" GroupName="ImportFit" Content="Speed" Margin="0,0,8,0" VerticalAlignment="Center" Checked="OnFitChanged" />
+                    <RadioButton x:Name="HoldChoice" GroupName="ImportFit" Content="Hold" Margin="0,0,12,0" VerticalAlignment="Center" Checked="OnFitChanged" />
+                    <CheckBox x:Name="LoopFitBox" Content="Seamless loop" VerticalAlignment="Center" Checked="OnFitChanged" Unchecked="OnFitChanged" />
+                    <local:HelpButton x:Name="LoopHelp" Heading="Seamless loop" Text="{x:Static lib:HelpTexts.SeamlessLoop}" />
+                </WrapPanel>
             </StackPanel>
             <StackPanel x:Name="BusyPanel" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
                 <ProgressBar IsIndeterminate="True" Width="140" Height="14" Margin="0,0,8,0" />

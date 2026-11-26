@@ -46,7 +46,7 @@ public sealed class OodleTests : IDisposable
     [Fact]
     public void APinnedHashLetsTheFileThroughToTheLoader()
     {
-        // the control of the test above: pinning this file's own hash passes the gate, and the loader then fails on a file that isn't a DLL
+        // the control of the test above: pinning this file's own hash passes the check, and the loader then fails on a file that isn't a DLL
         string dll = FakeDll();
         var ex = Assert.Throws<OodleException>(() => OodleLibrary.Load(_dir, [Sha256Hex.OfFile(dll)]));
         Assert.Contains("does not load", ex.Message);

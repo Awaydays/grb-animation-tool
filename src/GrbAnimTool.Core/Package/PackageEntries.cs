@@ -14,7 +14,7 @@ public static class PackageEntries
 {
     /// <summary>The item to keep for an edit's result: the clip's slot, the edited record, the edit, the checks' verdict and report.</summary>
     public static PackageItem ForEdit(EditOutcome o) =>
-        new(o.Clip, o.Result.Bytes, o.Request.Change, o.Report.Verdict, o.ReportText(), DateTime.Now);
+        new(o.Clip, o.Result.Bytes, o.Change, o.Report.Verdict, o.ReportText(), DateTime.Now);
 
     public static PackageItemKind Kind(PackageItem item) => item.Change.IsEdit ? PackageItemKind.Edit : PackageItemKind.Import;
 
@@ -62,9 +62,34 @@ public static class PackageEntries
     {
         var status = g.Vanilla?.StatusOf(slot.Id, record);
         if (status == ClipStatus.Vanilla) return GamesOwnUnchanged;
-        if (g.FindClip(slot.Id) is not { } held || !held.Bytes.Span.SequenceEqual(record)) return null;
+        // the row it was made from (a modded file's, say) or the row the game loads for the clip
+        if (!slot.Bytes.Span.SequenceEqual(record) && (g.FindClip(slot.Id) is not { } held || !held.Bytes.Span.SequenceEqual(record))) return null;
         if (kind == PackageItemKind.Edit) return EditChangesNothing;
         return status == ClipStatus.Replaced ? NotTheGamesOwn + importHeld : importHeld;
+    }
+
+    /// <summary>Every check of the kept report (<see cref="CheckResult.Line"/>'s lines read back: the level, the check's name, the message
+    /// with where its worst fell, in the Edit screen's words), the failures first, then the warnings, then the passes, each in report order, as the Edit screen
+    /// lists them.</summary>
+    public static List<CheckResult> Checks(PackageItem item)
+    {
+        var l = new List<CheckResult>();
+        foreach (var raw in item.ReportText.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            foreach (var level in new[] { CheckLevel.Pass, CheckLevel.Warn, CheckLevel.Fail })
+            {
+                string w = CheckResult.Word(level);
+                if (!line.StartsWith(w + " ", StringComparison.Ordinal)) continue;
+                string rest = line[w.Length..].TrimStart();
+                // where the worst fell, worded as the Edit screen words it: "(tick 7, Foot_L)", not the report's "(worst at tick 7, Foot_L)"
+                int worst = rest.LastIndexOf(" (worst at ", StringComparison.Ordinal);
+                if (worst >= 0 && rest.EndsWith(')')) rest = rest[..worst] + " (" + rest[(worst + " (worst at ".Length)..];
+                int colon = rest.IndexOf(": ", StringComparison.Ordinal);
+                l.Add(colon < 0 ? new CheckResult("", level, rest) : new CheckResult(rest[..colon], level, rest[(colon + 2)..]));
+            }
+        }
+        return [.. l.OrderByDescending(c => c.Level)];
     }
 
     /// <summary>The report's lines at warn or fail, each "WARN name: message" with its level word, in report order.</summary>

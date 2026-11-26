@@ -314,7 +314,7 @@ public sealed class ScreenLogicTests : IDisposable
         var plan = PackageBuild.Plan(clips, "My pack", Path.Combine(_dir, "out"), [game]);
         Assert.Null(plan.Problem);
         Assert.Equal(Path.Combine(_dir, "out", "My pack"), plan.OutputFolder);
-        Assert.Equal(new[] { "102_-_walk.Animation", "7_-_other.Animation", "Original clips" + Path.DirectorySeparatorChar, Path.Combine("Original clips", "102_-_walk.Animation"),
+        Assert.Equal(new[] { "1_-_walk.Animation", "1_-_other.Animation", "Original clips" + Path.DirectorySeparatorChar, Path.Combine("Original clips", "102_-_walk.Animation"),
             Path.Combine("Original clips", "7_-_other.Animation"), PackageBuild.MarkerName }, plan.Files.Select(f => f.Name));
         Assert.Equal("Original clips", PackageBuild.OriginalsFolderName);
         Assert.Equal("My pack", plan.PackageName);
@@ -881,8 +881,8 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
     static ClipGraph? _graph;
     ClipGraph G => _graph ??= ClipGraph.Read(f.Install);
     static ClipIndex? _index;
-    static readonly object Gate = new();
-    ClipIndex X { get { lock (Gate) return _index ??= ClipIndex.Build(f.Install, GraphFacts.Read(f.Install.Records, f.Install.Clips.Select(c => c.Id)), ClipIndexList.Embedded()); } }
+    static readonly object ReadOnce = new();
+    ClipIndex X { get { lock (ReadOnce) return _index ??= ClipIndex.Build(f.Install, GraphFacts.Read(f.Install.Records, f.Install.Clips.Select(c => c.Id)), ClipIndexList.Embedded()); } }
 
     [GameDataFact]
     public void SwapSourcesOnTheInstall()
@@ -957,7 +957,7 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
             var built = PackageBuild.Build(g, plan, items, replace: false);
             string folder = Path.Combine(save, "Originals"), originals = Path.Combine(folder, "Original clips");
             Assert.Equal(folder, built.Folder);
-            Assert.Equal(new[] { PackageBuild.MarkerName, FileName(face), FileName(hello), "Original clips" }.Order(StringComparer.Ordinal), Entries(folder));
+            Assert.Equal(new[] { PackageBuild.MarkerName, PackageFile(face), PackageFile(hello), "Original clips" }.Order(StringComparer.Ordinal), Entries(folder));
             Assert.Equal(new[] { FileName(face), FileName(hello) }.Order(StringComparer.Ordinal), Entries(originals));
             foreach (var c in new[] { hello, face })
             {
@@ -965,7 +965,7 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
                 Assert.Equal(RecordFile.Content(c.Bytes.Span), file);
                 // the record the file gives back hashes as the game's own, by the table built into the tool
                 Assert.Equal(ClipStatus.Vanilla, g.Vanilla!.StatusOf(c.Id, RecordFile.ToRecord(file, c.Name)));
-                Assert.Equal(RecordFile.Content(Edited(c)), File.ReadAllBytes(Path.Combine(folder, FileName(c))));
+                Assert.Equal(RecordFile.Content(Edited(c)), File.ReadAllBytes(Path.Combine(folder, PackageFile(c))));
                 Assert.Contains(built.Files, x => x.FileName == Path.Combine("Original clips", FileName(c)) && x.Sha256 == Core.Hashing.Sha256Hex.Of(file));
             }
             Assert.Equal(new[] { PackageBuild.FromInstall, PackageBuild.FromInstall }, built.Originals.Select(o => o.From));
@@ -1050,8 +1050,12 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
             Assert.Null(before.Problem);
             Assert.True(before.Originals[0].Pending);
             Assert.Equal(PackageBuild.FromInstall, before.Originals[1].From);
-            Assert.Equal($"Your game folder holds a modded clip in place of {c.Name}: looking for the game's own record for \"Original clips\"...",
-                PackageBuild.OriginalsNote(before.Originals));
+            // and that the install's mod of it is replaced by the package, kept in the originals as 1_-_
+            Assert.Equal($"Your game folder holds a modded clip in place of {c.Name}: looking for the game's own record for \"Original clips\"... "
+                + PackageBuild.ReplacesModNote(before.Originals), PackageBuild.OriginalsNote(before.Originals));
+            Assert.Contains($"already hold a mod of {c.Name}", PackageBuild.ReplacesModNote(before.Originals));
+            Assert.Same(c, before.Originals[0].Current);
+            Assert.Null(before.Originals[1].Current);
             // the game's base forge read: it holds the animation datafile, but not the game's own record of this clip by its hash
             var found = PackageBuild.Originals(installed, items, readForges: true);
             if (found[0].Record is { } fromBase)
@@ -1072,14 +1076,15 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
                 var without = PackageBuild.Build(installed, plan, items, replace: false);
                 Assert.False(File.Exists(Path.Combine(without.Folder, "Original clips", FileName(c))));
                 Assert.Equal(RecordFile.Content(other.Bytes.Span), File.ReadAllBytes(Path.Combine(without.Folder, "Original clips", FileName(other))));
-                Assert.Equal(RecordFile.Content(Edited(c)), File.ReadAllBytes(Path.Combine(without.Folder, FileName(c))));
+                Assert.Equal(RecordFile.Content(Edited(c)), File.ReadAllBytes(Path.Combine(without.Folder, PackageFile(c))));
+                Assert.Equal(RecordFile.Content(c.Bytes.Span), File.ReadAllBytes(Path.Combine(without.Folder, "Original clips", PackageFile(c))));
                 Assert.NotNull(without.Originals[0].Missing);
                 Directory.Delete(save, true);
-                // no original found for any clip: no originals folder at all
+                // no game's own record found for any clip: the originals folder holds only the install's mod, as 1_-_
                 var alone = new List<PackageItem> { items[0] };
                 var lonely = PackageBuild.Build(installed, PackageBuild.Plan(installed, alone, "Mods", save), alone, replace: false);
-                Assert.False(Directory.Exists(Path.Combine(lonely.Folder, "Original clips")));
-                Assert.True(File.Exists(Path.Combine(lonely.Folder, FileName(c))));
+                Assert.Equal(new[] { PackageFile(c) }, Directory.GetFiles(Path.Combine(lonely.Folder, "Original clips")).Select(Path.GetFileName));
+                Assert.True(File.Exists(Path.Combine(lonely.Folder, PackageFile(c))));
                 Directory.Delete(save, true);
             }
 
@@ -1114,7 +1119,8 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
                 var built = PackageBuild.Build(installed, plan, items, replace: false, backupForge: GameData.Forge);
                 Assert.Equal(new[] { PackageBuild.FromBackupForge, PackageBuild.FromInstall }, built.Originals.Select(o => o.From));
                 Assert.Equal(RecordFile.Content(vanilla.Bytes.Span), File.ReadAllBytes(Path.Combine(built.Folder, "Original clips", FileName(c))));
-                Assert.Equal($"\"Original clips\": {c.Name} is taken from your vanilla forge backup: your game folder holds a modded clip there.", PackageBuild.OriginalsNote(built.Originals));
+                Assert.Equal($"\"Original clips\": {c.Name} is taken from your vanilla forge backup: your game folder holds a modded clip there. "
+                    + PackageBuild.ReplacesModNote(built.Originals), PackageBuild.OriginalsNote(built.Originals));
                 Directory.Delete(save, true);
                 // a backup that isn't vanilla in that slot (the modded install's own forge): not taken, the clip left without its original
                 var notVanilla = PackageBuild.Originals(installed, items, readForges: true, backupForge: Path.Combine(GameData.Game!, "DataPC_patch_01.forge"));
@@ -1135,8 +1141,9 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
                 Assert.Equal(RecordFile.Content(vanilla.Bytes.Span), file);
                 Assert.Equal(ClipStatus.Vanilla, installed.Vanilla!.StatusOf(c.Id, RecordFile.ToRecord(file, c.Name)));
                 Assert.Equal(RecordFile.Content(other.Bytes.Span), File.ReadAllBytes(Path.Combine(built.Folder, "Original clips", FileName(other))));
-                Assert.Equal(RecordFile.Content(Edited(c)), File.ReadAllBytes(Path.Combine(built.Folder, FileName(c))));
-                string note = $"\"Original clips\": {c.Name} is taken from the game's base files: your game folder holds a modded clip there.";
+                Assert.Equal(RecordFile.Content(Edited(c)), File.ReadAllBytes(Path.Combine(built.Folder, PackageFile(c))));
+                string note = $"\"Original clips\": {c.Name} is taken from the game's base files: your game folder holds a modded clip there. "
+                    + PackageBuild.ReplacesModNote(built.Originals);
                 Assert.Equal(note, PackageBuild.OriginalsNote(built.Originals));
                 var after = PackageBuild.Plan(installed, items, "Mods", save);
                 Assert.Equal(note, PackageBuild.OriginalsNote(after.Originals));
@@ -1467,6 +1474,9 @@ public sealed class ScreenLogicGameTests(InstallFixture f)
     static bool Writable(ClipEntry x) => x.Record is { WalkedToEnd: true } && RecordFile.NameRuleBroken(x.Name, x.Id) is null && RecordFile.HeadRuleBroken(x.Bytes.Span) is null;
 
     static string FileName(ClipEntry c) => RecordFile.ClipFileName(c.Index, c.Name, c.Id);
+
+    /// <summary>A package's own file of a clip: <c>1_-_name.Animation</c>, loaded before the game's own file.</summary>
+    static string PackageFile(ClipEntry c) => RecordFile.ClipFileName(PackageBuild.PackageFileIndex, c.Name, c.Id);
 
     /// <summary>Three clips, each as game files (<paramref name="g"/>, the vanilla forge) and as <paramref name="installed"/> (the game
     /// folder's own forge, read only, where other packages' clips are installed) hold it: <c>Y</c> the game's own on game files but not on

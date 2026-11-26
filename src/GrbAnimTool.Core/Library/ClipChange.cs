@@ -6,7 +6,7 @@ namespace GrbAnimTool.Core.Library;
 
 /// <summary>What changed a clip: one of the five edits, an import of a .glb, or (<see cref="Text"/>) an edit an earlier version kept in
 /// words this one can't read back.</summary>
-public enum ChangeKind { Mirror, Scale, Speed, Trim, Swap, Import, Text }
+public enum ChangeKind { Mirror, Scale, Speed, Trim, Swap, Import, Text, Replace }
 
 /// <summary>What was changed in a clip, and its one wording (<see cref="Words"/>): the kind; the factor (root-motion scale and speed); the
 /// cut (trim: the original clip's ticks, and its ticks a second); the source clip's name (swap); the .glb's path (import); or the text an
@@ -31,6 +31,8 @@ public sealed record ClipChange
     public static ClipChange Trim(int from, int to) => new() { Kind = ChangeKind.Trim, From = from, To = to };
     public static ClipChange Swap(string? sourceClip) => new() { Kind = ChangeKind.Swap, SourceClip = sourceClip };
     public static ClipChange Imported(string glbPath) => new() { Kind = ChangeKind.Import, GlbPath = glbPath };
+    /// <summary>A replace: <paramref name="what"/> says the source and the fit ("motion from mca_emote_Hello, cut from 1.2 s").</summary>
+    public static ClipChange Replaced(string what) => new() { Kind = ChangeKind.Replace, Text = what };
 
     /// <summary>The change an edit request makes.</summary>
     public static ClipChange Of(EditRequest r) => r.Kind switch
@@ -53,6 +55,7 @@ public sealed record ClipChange
         ChangeKind.Trim => $"Trim {SecondsText(From, TicksPerSecond)} s to {SecondsText(To, TicksPerSecond)} s",
         ChangeKind.Swap => $"Swap: motion from {SourceClip ?? "another clip"}",
         ChangeKind.Import => $"Imported: {Path.GetFileName(GlbPath ?? "")}",
+        ChangeKind.Replace => $"Replaced: {Text}",
         _ => Text ?? "",
     };
 

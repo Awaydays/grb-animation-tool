@@ -53,6 +53,7 @@ public partial class LibraryView : UserControl
     public LibraryView()
     {
         InitializeComponent();
+        ClipPanel.ReadableColumnWidth = ClipListPanel.LibraryReadableWidth;
         ClipPanel.Picked += c => { if (c is not null && c != _clip) ShowPicked(c); };
         // the list with a few rows, and the viewer with its timeline, in a window of any height
         PaneScroll.LeastHeight = () => Math.Max(ClipPanel.LeastHeight, LeastViewerHeight);
@@ -314,6 +315,8 @@ public partial class LibraryView : UserControl
             a = g.Clips.Count(c => c.Status == ClipStatus.Added), u = g.Clips.Count(c => c.Status == ClipStatus.Unknown);
         string s = $"{g.Clips.Count:N0} clips  ·  record folder {g.RecordFolderName}  ·  vanilla {v:N0}  ·  replaced {r:N0}  ·  added {a:N0}";
         if (u > 0) s += $"  ·  unknown {u:N0}";
+        if (g.UnpackedFolderPath is not null) s += $"  ·  unpacked folder read: {g.Clips.Count(c => c.FromFile):N0} file(s) beside the forge's, {g.Clips.Count(c => c.Modded):N0} modded";
+        if (g.UnpackedFolderError is { } ue) s += $"  ·  {ue}";
         if (g.Vanilla is null) s += "  (this copy of the tool has no table of the game's clips)";
         else if (g.VanillaClipsMissing > 0) s += $"  ·  game clips missing {g.VanillaClipsMissing:N0}";
         SummaryText.Text = s;
@@ -459,7 +462,7 @@ public partial class LibraryView : UserControl
             return (r.Index, r.Outcome, r.GraphTime, r.SaveError);
         }
         var sw = Stopwatch.StartNew();
-        var facts = GraphFacts.Read(g.Records, g.Clips.Select(c => c.Id), ClipIndexCache.GraphShare(progress), cancel);
+        var facts = GraphFacts.Read(g.Records, g.ForgeClips.Select(c => c.Id),ClipIndexCache.GraphShare(progress), cancel);
         var time = sw.Elapsed;
         var index = ClipIndex.Build(g, facts, ClipIndexList.Embedded(), IndexFingerprint.Of(g));
         progress.Report(1.0);
@@ -542,7 +545,8 @@ public partial class LibraryView : UserControl
         InfoDuration.Text = $"{c.Duration:F3} s";
         InfoTicks.Text = $"{c.LastTick} (frames 0 to {c.LastTick})";
         InfoTracks.Text = c.TrackCount.ToString();
-        InfoStatus.Text = c.Status.ToString();
+        InfoStatus.Text = c.StatusText + (c.FilePath is { } file ? $"  ·  file {System.IO.Path.GetFileName(file)}" : "") + (c.Note is { } note ? $"  ·  {note}" : "");
+        InfoStatus.ToolTip = c.FilePath is null && c.Note is null ? null : InfoStatus.Text;
         foreach (var t in new[] { InfoRot, InfoPos, InfoOther, InfoMover }) t.Text = "…";
         Shown();
         return Read();

@@ -16,7 +16,7 @@ public static class DecodePass
     {
         int clips = 0; long keys = 0, poses = 0; double sum = 0;
         IEnumerable<ReadOnlyMemory<byte>> bytes = records is null
-            ? g.Clips.Select(c => c.Bytes)
+            ? g.ForgeClips.Select(c => c.Bytes)
             : records.Where(r => r.Type == ClipRecord.Type).Select(r => r.Bytes);
         foreach (var b in bytes)
         {

@@ -17,9 +17,9 @@ namespace GrbAnimTool.Tests;
 public sealed class EditGameTests(InstallFixture f, ITestOutputHelper output)
 {
     static ClipGraph? _graph;
-    static readonly object Gate = new();
+    static readonly object ReadOnce = new();
 
-    ClipGraph Graph() { lock (Gate) return _graph ??= ClipGraph.Read(f.Install); }
+    ClipGraph Graph() { lock (ReadOnce) return _graph ??= ClipGraph.Read(f.Install); }
 
     EditContext Ctx(ClipEntry e) => new(f.Install.Skeleton, f.Install.SharedTable, Graph().Verdict(e.Id));
 

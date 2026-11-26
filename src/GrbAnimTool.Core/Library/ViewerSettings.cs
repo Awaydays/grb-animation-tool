@@ -19,6 +19,19 @@ public sealed record ViewerSettings
     [JsonConverter(typeof(TextOrNull))]
     public string? BackupForge { get; init; }
 
+    /// <summary>The Package screen's save folder chosen under Settings (null: none, the folder last built in).</summary>
+    [JsonConverter(typeof(TextOrNull))]
+    public string? PackageFolder { get; init; }
+
+    /// <summary>The save folder the last Build wrote into, the Package screen's start without <see cref="PackageFolder"/>.</summary>
+    [JsonConverter(typeof(TextOrNull))]
+    public string? LastPackageFolder { get; init; }
+
+    /// <summary>The Package screen's save folder at start: <see cref="PackageFolder"/>, else <see cref="LastPackageFolder"/>, else
+    /// <paramref name="fallback"/>.</summary>
+    public string StartPackageFolder(string fallback) =>
+        PackageFolder is { Length: > 0 } p ? p : LastPackageFolder is { Length: > 0 } l ? l : fallback;
+
     /// <summary>The folder the Log screen follows the newest clip log in (null: the logger's own folder in the Documents folder).</summary>
     [JsonConverter(typeof(TextOrNull))]
     public string? LogFolder { get; init; }

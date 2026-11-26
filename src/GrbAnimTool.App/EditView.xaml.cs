@@ -184,6 +184,10 @@ public partial class EditView : UserControl
         RetryButton.Visibility = Visibility.Collapsed;
         ClipPanel.ColumnData = null;
         ClipPanel.SetClips(g.Clips);
+        _replaceSource = null;
+        _glbTicks = null;
+        _replaceGlb = null;
+        OnReplaceSearch(ReplaceSearch, null!);
         ShowOptions();
         ShowOutcome();
         InstallWork.Open(g);
@@ -447,7 +451,7 @@ public partial class EditView : UserControl
     {
         var clips = ClipPanel.Clips;
         if (!ReferenceEquals(choices, _notToldOf.Marks) || !ReferenceEquals(clips, _notToldOf.Clips))
-            _notToldOf = (choices, clips, clips.Where(c => choices.MaskFor(c) is null).Select(c => c.Id).Distinct().Count());
+            _notToldOf = (choices, clips, clips.Where(c => choices.MaskFor(c) is null).Select(c => c.Key).Distinct().Count());
         return _notToldOf.Count;
     }
 
@@ -594,6 +598,9 @@ public partial class EditView : UserControl
         _clip = c;
         _ctx = null;
         _original = null;
+        // the last replace's track map and loop mark are the last clip's
+        TrackMapText.Text = "";
+        _loopFrom = null;
         _outcome = null;
         _options = [];
         _sources = [];
@@ -608,7 +615,7 @@ public partial class EditView : UserControl
             ApplyChoices(keepPlace: true);   // (the clip is scrolled to just below)
         ClipPanel.Show(c);
         ClipText.Text = c.Name;
-        ClipInfo.Text = FormattableString.Invariant($"record {c.Index}, ID 0x{c.Id:X16}, {c.Duration:F3} s ({c.LastTick} ticks), {c.TrackCount} tracks, {c.Status}");
+        ClipInfo.Text = FormattableString.Invariant($"record {c.Index}, ID 0x{c.Id:X16}, {c.Duration:F3} s ({c.LastTick} ticks), {c.TrackCount} tracks, {c.StatusText}{(c.FilePath is { } f ? $", file {System.IO.Path.GetFileName(f)}" : "")}");
         ShowUsers();
         _trim = TrimHandles.Whole(c.LastTick);
         ++_trimCheckId;
@@ -743,6 +750,7 @@ public partial class EditView : UserControl
         TrimHint.Visibility = TrimBorder.Visibility = TrimLabel.Visibility = TrimValue.Visibility = trim ? Visibility.Visible : Visibility.Collapsed;
         if (trim) DrawTrim();
         ShowTrimCheck();
+        ShowReplace();
         UpdateButtons();
     }
 
@@ -905,10 +913,11 @@ public partial class EditView : UserControl
         var kind = Chosen;
         // a trim with both handles at the clip's ends would change nothing; a cut being tried, or refused, isn't made; a speed only at a
         // factor that works
-        ApplyButton.IsEnabled = !_busy && !_selectDelay.IsEnabled && _clip is not null && _ctx is not null && kind is not null && (kind != EditKind.Swap || SourceBox.SelectedItem is ClipEntry)
+        ApplyButton.IsEnabled = !_busy && !_selectDelay.IsEnabled && _clip is not null && (ReplaceChosen ? ReplaceReady
+            : _ctx is not null && kind is not null && (kind != EditKind.Swap || SourceBox.SelectedItem is ClipEntry)
             && (kind != EditKind.Trim || _trim.Cuts && !_trimPending && _trimBlock is null)
             && (kind != EditKind.Speed || SpeedRefused(SpeedSlider.Value) is null)
-            && (kind != EditKind.Scale || FactorRefused(_scales, ScaleSlider.Value) is null);
+            && (kind != EditKind.Scale || FactorRefused(_scales, ScaleSlider.Value) is null));
         ApplyKeepButton.IsEnabled = ApplyButton.IsEnabled;
         // a result made but not in the package is said, until it is added or another is made
         NotKeptText.Visibility = !_busy && _outcome is { } made && Unchanged is null && !InPackage(made) ? Visibility.Visible : Visibility.Collapsed;
@@ -972,6 +981,9 @@ public partial class EditView : UserControl
     /// <summary>Runs the chosen edit in the background and shows its result. Returns the refusal or failure, or null.</summary>
     public async Task<string?> ApplyAsync()
     {
+        if (ReplaceChosen) return await ReplaceAsync();
+        _loopFrom = null;
+        TrackMapText.Text = "";
         if (_clip is null || _ctx is null || Request() is not { } req) return "Choose a clip and an edit first.";
         if (req.Kind == EditKind.Trim && !_trim.Cuts) return "The trim's handles are at the clip's ends: there is nothing to trim.";
         var c = _clip;
@@ -1028,7 +1040,7 @@ public partial class EditView : UserControl
         if (_outcome is null) return "Nothing applied to add.";
         if (Unchanged is { } same) return $"Not added: {_outcome.Clip.Name}: {same}.";
         bool replaced = PackageList.Current.Keep(PackageEntries.ForEdit(_outcome));
-        StatusText.Text = $"Added {_outcome.Clip.Name} ({_outcome.Request.Describe()}) to the package{(replaced ? ", in place of the one added before for this clip" : "")}. "
+        StatusText.Text = $"Added {_outcome.Clip.Name} ({_outcome.Change.Words}) to the package{(replaced ? ", in place of the one added before for this clip" : "")}. "
             + $"The package holds {PackageList.Current.Count}.";
         return null;
     }
@@ -1150,6 +1162,7 @@ public partial class EditView : UserControl
         _head = TimelineMarks.Draw(MarkStrip, _clock.Duration, _events, _plants);
         TimelineMarks.MoveHead(_head, MarkStrip, _clock.Time, _clock.Duration);
         MarkText.Text = _original is null ? "" : TimelineMarks.Summary(_events, _plants);
+        DrawLoopMark();
     }
 
     void OnMarkStripSized(object sender, SizeChangedEventArgs e) => DrawMarks();
@@ -1186,7 +1199,7 @@ public partial class EditView : UserControl
             // the clip and its change in the short wording; then the result's time and tick, and the original's: at the edit's progress, or
             // in its own time
             // (the head made once for each result shown, not on every frame)
-            if (!ReferenceEquals(_overlayHeadOf, o)) (_overlayHeadOf, _overlayHead) = (o, $"{o.Clip.Name} ({o.Request.Describe()})");
+            if (!ReferenceEquals(_overlayHeadOf, o)) (_overlayHeadOf, _overlayHead) = (o, $"{o.Clip.Name} ({o.Change.Words})");
             text = _reference.FollowsEdit
                 ? $"{_overlayHead}\n{_clock.Time:F3} s  tick {t} / {m.LastTick}  (the original's tick {ot}, following the edit's progress)  mover {(mover ? "on" : "off")}"
                 : $"{_overlayHead}\n{_clock.Time:F3} s  tick {t} / {m.LastTick}  (the original in its own time: {_reference.Time:F3} s  tick {ot} / {_reference.LastTick})  mover {(mover ? "on" : "off")}";
@@ -1459,7 +1472,7 @@ public partial class EditView : UserControl
         }
         if (await ApplyAsync() is { } e2) return e2;
         var r = _outcome!;
-        Console.WriteLine($"edited {r.Clip.Name} ({r.Request.Describe()}): {CheckResult.Word(r.Report.Verdict)}");
+        Console.WriteLine($"edited {r.Clip.Name} ({r.Change.Words}):{CheckResult.Word(r.Report.Verdict)}");
         foreach (var l in r.Report.Lines()) Console.WriteLine("   " + l);
         if (a.EditKeep)
         {

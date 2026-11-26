@@ -87,7 +87,7 @@ public sealed class EditCensus
     {
         var mirror = new SkeletonMirror(g.Skeleton);
         var bag = new ConcurrentBag<ClipEditFacts>();
-        Parallel.ForEach(g.Clips, new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount }, e => bag.Add(Facts(g, graph, mirror, e)));
+        Parallel.ForEach(g.ForgeClips, new ParallelOptions { MaxDegreeOfParallelism = parallelism ?? Environment.ProcessorCount }, e => bag.Add(Facts(g, graph, mirror, e)));
         var clips = bag.OrderBy(c => c.Clip.Index).ToList();
         var groups = clips.Where(c => c.Walked).GroupBy(c => c.SwapKey).Where(x => x.Count() >= 2)
             .Select(x => (IReadOnlyList<ClipEditFacts>)x.OrderBy(c => c.Clip.Index).ToList()).OrderByDescending(x => x.Count).ThenBy(x => x[0].Clip.Index).ToList();

@@ -56,20 +56,39 @@ public partial class PackageView : UserControl
             (c, d) => RowOf(c, d)?.Item.Change.Detail ?? "");
         ItemsPanel.AddColumn("Warnings", 320, "The checks' warnings and the edit's: hover a row for the whole text", (c, d) => RowOf(c, d)?.Warnings.Replace('\n', ' ') ?? "",
             (c, d) => RowOf(c, d)?.Warnings ?? "");
+        // the package's clips are all changed ones: the Modded only filter has nothing to do here
+        ItemsPanel.ModdedRow.Visibility = Visibility.Collapsed;
         ItemsPanel.Picked += _ => RemoveButton.IsEnabled = CanRemove;
+        // the checks follow the selection, also when a search or a filter takes the selected row out (the list raises no Picked then)
+        ItemsPanel.List.SelectionChanged += (_, _) => ShowChecks();
         // the list's view getting wider or narrower (the window resized, the upright scroll bar shown or hidden): the Change column fitted again
         ItemsPanel.List.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
         {
             if (e.ViewportWidthChange != 0 && e.OriginalSource == FindViewer(ItemsPanel.List)) RefitChangeColumn();
         }));
         // the list with a few rows and Remove, and the name, the folders, a few files and Build, in a window of any height
-        PaneScroll.LeastHeight = () => Math.Max(ItemsTitle.DesiredSize.Height + 4 + ItemsPanel.LeastHeight + RemoveRow.DesiredSize.Height + RemoveRow.Margin.Top,
+        PaneScroll.LeastHeight = () => Math.Max(ItemsTitle.DesiredSize.Height + 4 + ItemsPanel.LeastHeight + RemoveRow.DesiredSize.Height + RemoveRow.Margin.Top
+            + (ChecksPanel.Visibility == Visibility.Visible ? ChecksPanel.DesiredSize.Height + ChecksPanel.Margin.Top : 0),
             SettingsGrid.DesiredSize.Height + FilesTitle.DesiredSize.Height + 12 + 120 + BuildRow.DesiredSize.Height + BuildRow.Margin.Top);
         _typed.Tick += (_, _) => _ = RefreshOffThreadAsync();
-        FolderBox.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "GRB Anim Tool packages");
+        FolderBox.Text = DefaultSaveFolder;
         PackageList.Current.Changed += (_, _) => Dispatcher.BeginInvoke(() => _ = RefreshOffThreadAsync());
         Refresh();
     }
+
+    /// <summary>The selected row's checks, every one, as the Edit screen lists them (<see cref="PackageEntries.Checks"/>); hidden with no row
+    /// selected.</summary>
+    void ShowChecks()
+    {
+        var row = ItemsPanel.SelectedClip is { } c ? RowOf(c, ItemsPanel.ColumnData) : null;
+        ChecksPanel.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
+        CheckList.ItemsSource = row is null ? null
+            : PackageEntries.Checks(row.Item).Select(x => new EditView.ReportRow(CheckResult.Word(x.Level), x.Level, x.Check, x.Message)).ToList();
+        ChecksTitle.Text = row is null ? "" : $"Checks of {row.Clip}: {row.Verdict}";
+    }
+
+    /// <summary>The save folder with no setting and no build yet: a folder of the tool's own in the Documents folder.</summary>
+    internal static string DefaultSaveFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "GRB Animation Tool packages");
 
     /// <summary>Whether Remove can take the clip selected out: not busy, and the clip is in the list (not one of a build shown after it).</summary>
     bool CanRemove => !_busy && ItemsPanel.SelectedClip is { } c && PackageList.Current.Items.Any(i => i.Slot.Id == c.Id);
@@ -193,6 +212,7 @@ public partial class PackageView : UserControl
         ShownRows = rows;
         ItemsPanel.ColumnData = rows.ToDictionary(r => r.Item.Slot.Id);
         ItemsPanel.ReplaceClips([.. rows.Select(r => r.Item.Slot)]);
+        ShowChecks();
         FitChangeColumn(rows);
         // Build never writes before who plays each clip is on the screen: while the index is read it waits, greyed, with the progress
         bool waiting = installOpen && _index is null && _indexError is null && items.Count > 0;
@@ -436,7 +456,7 @@ public partial class PackageView : UserControl
         FileList.ItemsSource = items.Count == 0 ? null : plan.Files;
         PlanFolderText.Text = plan.OutputFolder.Length == 0 || items.Count == 0 ? "" : $"into {plan.OutputFolder}{Path.DirectorySeparatorChar}";
         if (l.Undo)
-            note = "That folder is a local undo folder a pre-release build of this tool wrote beside a package: Build never replaces it. Give the package another name.";
+            note = "That folder is a local undo folder an earlier version of this tool wrote beside a package: Build never replaces it. Give the package another name.";
         else if (l.Occupied)
             note = !l.Build
                 ? "That folder exists and isn't a package this tool built (it has no marker file), so Build won't replace it: give the package another name or pick another save folder."
@@ -515,7 +535,11 @@ public partial class PackageView : UserControl
     public void UseSettings(string? path)
     {
         _settingsPath = path;
-        _ = SetBackup(path is null ? null : ViewerSettings.Load(path).BackupForge, remember: false);
+        var s = path is null ? new ViewerSettings() : ViewerSettings.Load(path);
+        // the save folder Build starts in: the one chosen under Settings, else the one last built in, else the tool's own default
+        PackageFolderSetting = s.PackageFolder is { Length: > 0 } pf ? pf : null;
+        FolderBox.Text = s.StartPackageFolder(DefaultSaveFolder);
+        _ = SetBackup(s.BackupForge, remember: false);
     }
 
     /// <summary>The backup box's own help, as the screen's markup gives it.</summary>
@@ -535,25 +559,43 @@ public partial class PackageView : UserControl
             && string.Equals(Path.GetFullPath(Backup), Path.GetFullPath(_install.PatchForgePath), StringComparison.OrdinalIgnoreCase))
             BackupBox.ToolTip = $"{Backup}: that is your game folder's own forge, not a backup from before you modded it: it gives no original for a clip you modded.\n\n{_backupHelp}";
         ClearBackupButton.IsEnabled = Backup is not null;
-        if (remember && _settingsPath is { } p)
-        {
-            var protect = new List<string>();
-            if (_install is { } g) protect.AddRange(Core.Export.ClipExport.ProtectedFolders(g));
-            // a settings file that can't be read now isn't written over (the other settings in it would be lost)
-            if (!ViewerSettings.TryLoad(p, out var kept, out var why))
-                ShowError($"The vanilla forge backup couldn't be remembered for the next run: the settings file couldn't be read ({why}), so it was left as it is.");
-            else
-                // guarded as every settings save is: never in the install's folders nor the game folder the settings name
-                try { (kept with { BackupForge = Backup }).Save(p, kept.GameFolder is { Length: > 0 } gf ? [.. protect, gf] : protect); }
-                // any failure to remember it is said here, and the plan is still made with the backup chosen
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-                {
-                    ShowError($"The vanilla forge backup couldn't be remembered for the next run: {ex.Message}");
-                }
-                // (a settings file that wasn't settings was kept aside before this save: said, after any error already shown)
-                finally { if (why is not null) ShowError(ErrorBox.Visibility == Visibility.Visible ? $"{ErrorText.Text} {why}" : why); }
-        }
+        if (remember) Remember(s => s with { BackupForge = Backup }, "The vanilla forge backup");
         return RefreshOffThreadAsync();
+    }
+
+    /// <summary>Writes <paramref name="change"/> into the settings file (none for a run without one), the file's other settings kept;
+    /// a failure is said on the screen, naming <paramref name="what"/>, and nothing else is stopped.</summary>
+    void Remember(Func<ViewerSettings, ViewerSettings> change, string what)
+    {
+        if (_settingsPath is not { } p) return;
+        var protect = new List<string>();
+        if (_install is { } g) protect.AddRange(Core.Export.ClipExport.ProtectedFolders(g));
+        // a settings file that can't be read now isn't written over (the other settings in it would be lost)
+        if (!ViewerSettings.TryLoad(p, out var kept, out var why))
+            ShowError($"{what} couldn't be remembered for the next run: the settings file couldn't be read ({why}), so it was left as it is.");
+        else
+            // guarded as every settings save is: never in the install's folders nor the game folder the settings name
+            try { change(kept).Save(p, kept.GameFolder is { Length: > 0 } gf ? [.. protect, gf] : protect); }
+            // any failure to remember it is said here, and the work it came from goes on
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                ShowError($"{what} couldn't be remembered for the next run: {ex.Message}");
+            }
+            // (a settings file that wasn't settings was kept aside before this save: said, after any error already shown)
+            finally { if (why is not null) ShowError(ErrorBox.Visibility == Visibility.Visible ? $"{ErrorText.Text} {why}" : why); }
+    }
+
+    /// <summary>The save folder chosen under Settings > Package folder, or null for none (Build then starts in the folder it last wrote
+    /// into).</summary>
+    internal string? PackageFolderSetting { get; private set; }
+
+    /// <summary>Sets the save folder Build starts in (Settings > Package folder; null: none): remembered in the settings, and put in the
+    /// save folder box at once.</summary>
+    public void SetPackageFolder(string? folder)
+    {
+        PackageFolderSetting = string.IsNullOrWhiteSpace(folder) ? null : folder;
+        Remember(s => s with { PackageFolder = PackageFolderSetting }, "The package folder");
+        if (PackageFolderSetting is { } f) FolderBox.Text = f;
     }
 
     void OnBrowseBackup(object sender, RoutedEventArgs e)
@@ -647,7 +689,7 @@ public partial class PackageView : UserControl
         using var _ = hold;
         WriteStarting?.Invoke();
         // the originals from the install, then the vanilla backup, then the base forge; a clip with none is built without it
-        return await RunBuild(g, items, () => Task.Run(() =>
+        var error = await RunBuild(g, items, () => Task.Run(() =>
             {
                 BeforeBuildReadsForTests?.Invoke();
                 return PackageBuild.Build(g, plan, items, replace, backup);
@@ -657,6 +699,9 @@ public partial class PackageView : UserControl
                 ? $"No \"{PackageBuild.OriginalsFolderName}\" folder: no clip's original was found."
                 : $"\"{PackageBuild.OriginalsFolderName}\" holds the game's own record of {(b.Originals.Any(o => o.Record is null) ? "the clips it replaces but those named below" : "each clip it replaces")}: "
                     + "copied over the package's files, they uninstall it.");
+        // the folder built in is where the next run starts, when no package folder is set under Settings
+        if (error is null) Remember(s => s with { LastPackageFolder = Path.GetFullPath(plan.SaveFolder) }, "The folder built in");
+        return error;
     }
 
     /// <summary>Runs a build of <paramref name="items"/>, kept on <paramref name="g"/>, with the screen busy, and shows its files or its

@@ -10,9 +10,9 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- The game's Oodle library is a 64-bit DLL, so every program that may load it runs as a 64-bit process. -->
     <PlatformTarget>x64</PlatformTarget>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>Awaydays</Authors>
-    <Product>GRB Anim Tool</Product>
+    <Product>GRB Animation Tool</Product>
     <Copyright>Copyright (C) 2026 Awaydays</Copyright>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>

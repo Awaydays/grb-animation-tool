@@ -41,6 +41,18 @@ public partial class ClipListPanel : UserControl
     Func<ClipEntry, bool>? _constraint;
     string? _constraintNote;
 
+    /// <summary>The readable-name column's width: the Library, with no screen's own columns beside it, gives it more room
+    /// (<see cref="LibraryReadableWidth"/>) than the shared lists can.</summary>
+    public double ReadableColumnWidth
+    {
+        get => ReadableColumn().Width;
+        set => ReadableColumn().Width = value;
+    }
+
+    public const double LibraryReadableWidth = 220;
+
+    GridViewColumn ReadableColumn() => ((GridView)List.View).Columns.Single(c => c.Header is GridViewColumnHeader { Tag: string t } && t == nameof(ClipSort.ReadableName));
+
     public ClipListPanel()
     {
         InitializeComponent();
@@ -310,6 +322,7 @@ public partial class ClipListPanel : UserControl
             Index = _index,
             Fields = _index?.SearchSource,
             Status = (StatusFilter)Math.Max(0, StatusBox.SelectedIndex),
+            ModdedOnly = ModdedBox.IsChecked == true,
             Family = (FamilyBox.SelectedItem as ComboBoxItem)?.Tag as string,
             Who = (WhoBox.SelectedItem as ComboBoxItem)?.Tag as string,
             What = (WhatBox.SelectedItem as ComboBoxItem)?.Tag as string,
@@ -404,6 +417,7 @@ public partial class ClipListPanel : UserControl
         _filling = true;
         SearchBox.Text = "";
         StatusBox.SelectedIndex = 0;
+        ModdedBox.IsChecked = false;
         FamilyBox.SelectedIndex = 0;
         WhoBox.SelectedIndex = WhatBox.SelectedIndex = 0;
         MinBox.Text = MaxBox.Text = "";

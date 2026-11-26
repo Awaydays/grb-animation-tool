@@ -154,7 +154,7 @@ public sealed class ClipIndex
 
     /// <summary>The index of an install's clips from its graph's facts and the tool's list.</summary>
     public static ClipIndex Build(GameInstall g, GraphFacts facts, ClipIndexList? list, IndexFingerprint? fingerprint = null) =>
-        Build(g.Clips.Select(c => (c.Id, c.Name)), facts, list, fingerprint);
+        Build(g.ForgeClips.Select(c => (c.Id, c.Name)), facts, list, fingerprint);
 
     /// <summary>The index of <paramref name="clips"/> (ID and name each) from the graph's facts and the tool's list.</summary>
     public static ClipIndex Build(IEnumerable<(ulong Id, string Name)> clips, GraphFacts facts, ClipIndexList? list, IndexFingerprint? fingerprint = null)

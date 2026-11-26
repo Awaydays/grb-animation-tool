@@ -10,11 +10,11 @@ namespace GrbAnimTool.Tests;
 /// path, the command line and the remembered settings.</summary>
 public sealed class LibraryTests
 {
-    static ClipEntry Entry(int index, ulong id, string name, float seconds, ClipStatus status = ClipStatus.Vanilla, int tracks = 1)
+    static ClipEntry Entry(int index, ulong id, string name, float seconds, ClipStatus status = ClipStatus.Vanilla, int tracks = 1, bool moddedFile = false)
     {
         var parts = Enumerable.Range(0, tracks).Select(i => ((uint)i + 1, Synthetic.PosCurve([0], Vector3.Zero))).ToArray();
         var bytes = Synthetic.Clip(name, id, seconds, parts);
-        return new ClipEntry { Index = index, Id = id, Name = name, Bytes = bytes, Record = ClipRecord.Parse(bytes), Status = status };
+        return new ClipEntry { Index = index, Id = id, Name = name, Bytes = bytes, Record = ClipRecord.Parse(bytes), Status = status, FromFile = moddedFile, Modded = moddedFile };
     }
 
     static readonly ClipEntry[] Clips =
@@ -64,6 +64,37 @@ public sealed class LibraryTests
     [InlineData("zzz", new string[0])]
     public void SearchMatchesNamesAndHexIds(string text, string[] expected) =>
         Assert.Equal(expected.Order().ToArray(), Names(new ClipQuery { Text = text }.Apply(Clips)).Order().ToArray());
+
+    /// <summary>Modded only: every row that isn't the game's own, a 1_-_ file (Modded, Modded (vanilla) too) and a record changed inside
+    /// the game's files (Replaced, Added); never a vanilla row.</summary>
+    [Fact]
+    public void ModdedOnlyShowsEveryRowThatIsntTheGamesOwn()
+    {
+        var file = Entry(1, 0x000001DE00AA0001, "mca_emote_Hello", 4.5f, ClipStatus.Replaced, moddedFile: true);
+        var fileSame = Entry(1, 0x000001DE00DD0004, "MCA_Sprint_Fwd", 0.8f, moddedFile: true);
+        ClipEntry[] rows = [.. Clips, file, fileSame];
+        Assert.Equal(["Modded", "Modded (vanilla)"], new[] { file.StatusText, fileSame.StatusText });
+        var shown = new ClipQuery { ModdedOnly = true }.Apply(rows);
+        Assert.Equal(["MCA_Sprint_Fwd file", "mca_emote_Hello file", "mcm_nwp_fm_std_V1_cycle forge", "nme_dth_front_01 forge"],
+            shown.Select(c => $"{c.Name} {(c.FromFile ? "file" : "forge")}").Order(StringComparer.Ordinal).ToArray());
+        // the control: without the filter the vanilla rows are there
+        Assert.Equal(3, new ClipQuery().Apply(rows).Count(c => !c.Modded && c.Status == ClipStatus.Vanilla));
+    }
+
+    /// <summary>The help texts of 1.1.0, word for word.</summary>
+    [Fact]
+    public void TheHelpTextsAreTheOnesWritten()
+    {
+        Assert.Equal("Build makes a folder with your changed files (named 1_-_...) and a folder with the files they replace. Place the files like any "
+            + "other animation mod. To undo, delete the 1_-_ files and put the originals back.", HelpTexts.Package);
+        Assert.Equal("Cut: uses part of the animation (only when it's longer than the clip). The suggested start is where the loop closes best.\n"
+            + "Speed: stretches or squeezes it to fit. It will play faster or slower.\n"
+            + "Hold: plays it at normal speed, then keeps the last pose until the clip's own length is over. You get control back only then.", HelpTexts.Fit);
+        Assert.Equal("Puts another game animation, or your .glb, on this clip. The clip keeps its own events, so emotes still end and give back control. "
+            + "Works best for emotes, idles and poses. Moving, aiming and weapon animations may not line up with the game's own timing.", HelpTexts.Replace);
+        Assert.Equal("Shows every file that isn't the game's own: Modded (a separate 1_-_ file) and Replaced (changed inside the game's files).", HelpTexts.Modded);
+        Assert.EndsWith(HelpTexts.Replace, HelpTexts.QuickStart);
+    }
 
     [Fact]
     public void StatusFamilyAndLengthFilter()

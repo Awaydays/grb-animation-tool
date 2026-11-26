@@ -81,7 +81,7 @@ public sealed class GraphFacts
         var results = new (List<int> Children, List<int> References, Dictionary<ulong, bool>? Uses, string? Failure)[docs.Count];
         long total = Math.Max(1, docs.Sum(r => (long)r.Bytes.Length)), done = 0;
         double reported = 0;
-        var gate = new object();
+        var sync = new object();
         progress?.Report(0);
         Parallel.For(0, docs.Count, new ParallelOptions { CancellationToken = cancel, MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount) }, i =>
         {
@@ -91,7 +91,7 @@ public sealed class GraphFacts
             catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException)) { results[i] = ([], [], null, $"{ex.GetType().Name}: {ex.Message}"); }
             long now = Interlocked.Add(ref done, r.Bytes.Length);
             if (progress is null) return;
-            lock (gate)
+            lock (sync)
             {
                 // reports from several threads arrive in any order: only a larger share is passed on
                 double share = Math.Min(1.0, now / (double)total);

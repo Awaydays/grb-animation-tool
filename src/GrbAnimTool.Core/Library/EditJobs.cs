@@ -70,9 +70,31 @@ public sealed class EditOutcome
         return Edited.Mover(0) * (invCut * m);
     }
 
+    /// <summary>The change the result makes, as the package keeps it: the request's, or a replace's own (<see cref="ClipChange.Replaced"/>).</summary>
+    public ClipChange Change => ChangeOverride ?? Request.Change;
+    /// <summary>A change that isn't one of the five edits (a replace), or null.</summary>
+    public ClipChange? ChangeOverride { get; init; }
+    /// <summary>The report's whole text when it isn't an edit's (a replace's, made by the import's writer), or null.</summary>
+    public string? ReportOverride { get; init; }
+
+    /// <summary>A replace's result (<see cref="Import.ClipReplace"/>, or an import fitted to the clip) as the Edit screen shows and keeps
+    /// results: the slot, its record rebuilt, both motions, the checks, and the change in the tool's wording.</summary>
+    public static EditOutcome OfReplace(Import.ImportResult r, ClipEntry? source, ClipChange change)
+    {
+        var notes = new List<string>();
+        if (r.Fit is { } f) notes.AddRange(f.Notes);
+        notes.AddRange(r.Fates.Select(x => x.ToString().Trim()));
+        return new EditOutcome
+        {
+            Clip = r.Slot, Request = new EditRequest(EditKind.Swap, Source: source), Result = new EditedClip(r.Record, r.Rebuilt.Record, r.Rebuilt, notes),
+            Original = r.Game, Edited = r.Imported, Report = r.Report, ChangeOverride = change, ReportOverride = r.ReportText(),
+        };
+    }
+
     /// <summary>The report as text: the edit, every check, the verdict, the warnings and the edit's notes.</summary>
     public string ReportText()
     {
+        if (ReportOverride is { } own) return own;
         var c = Clip;
         string head = string.Create(CultureInfo.InvariantCulture,
             $"Edit of {c.Index}_-_{c.Name} 0x{c.Id:X16} ({Request.Change.Detail}): {c.LastTick} ticks before, {Result.Record.LastTick} after; the record {Result.Bytes.Length} B");

@@ -21,6 +21,14 @@ public sealed record OriginalClip(ClipEntry Slot, byte[]? Record, string? From, 
 {
     /// <summary>The install's slot isn't the game's own and the base forge wasn't read yet.</summary>
     public bool Pending => Record is null && Missing is null;
+
+    /// <summary>The number the game's own file has in the unpacked folder (its record's index in the game's datafile): the original is
+    /// written under it. Null when it isn't known: no original is then written for the game's own file.</summary>
+    public int? Index { get; init; }
+
+    /// <summary>The player's current mod of this clip (the record the install loads for it, or a modded file), kept in the originals
+    /// folder as <c>1_-_name</c>, so putting the originals back restores it; null when the install holds the game's own clip.</summary>
+    public ClipEntry? Current { get; init; }
 }
 
 /// <summary>What a package build will write: the folder (the package's name inside the save folder) and every file in it, or why it can't
@@ -173,7 +181,12 @@ public static class PackageBuild
     /// set every writer of the tool refuses (<see cref="Export.ClipExport.ProtectedFolders(GameInstall)"/>).</summary>
     public static string[] Protected(GameInstall g) => [.. Export.ClipExport.ProtectedFolders(g)];
 
-    /// <summary>The plan for <paramref name="clips"/> (each clip's index, name and ID): the record files in clip order, the originals
+    /// <summary>The number every package file is named with, <c>1_-_name.Animation</c>: a repack sorts the files by it and keeps the first
+    /// of each clip, so the package's file is loaded in place of the game's own, which stays in the folder untouched.</summary>
+    public const int PackageFileIndex = 1;
+
+    /// <summary>The plan for <paramref name="clips"/> (each clip's name and ID, and the index of the game's own file, which names its
+    /// original: one of 1 or below has none): the record files (<c>1_-_name</c>) in clip order, the originals
     /// folder with the same file names, and the marker, and the first problem found (no clip, no name, no save folder, a save folder holding
     /// a character Windows refuses in a folder name, a save folder in or under a protected folder or in or under a folder carrying this
     /// tool's marker, a record file's name the rules refuse, two clips of one file name).</summary>
@@ -187,16 +200,16 @@ public static class PackageBuild
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in clips)
         {
-            string fname;
-            try { fname = RecordFile.ClipFileName(c.Index, c.Name, c.Id); }
+            string fname, oname;
+            try { fname = RecordFile.ClipFileName(PackageFileIndex, c.Name, c.Id); oname = RecordFile.ClipFileName(c.Index, c.Name, c.Id); }
             catch (RecordFileException ex) { problem ??= ex.Message; continue; }
             if (!names.Add(fname)) problem ??= $"{fname} is in the package twice";
             files.Add(new PackageFile(fname, $"replaces {c.Name}"));
-            originals.Add(new PackageFile(Path.Combine(OriginalsFolderName, fname), $"the game's own {c.Name}"));
+            if (c.Index > PackageFileIndex) originals.Add(new PackageFile(Path.Combine(OriginalsFolderName, oname), $"the game's own {c.Name}"));
         }
         if (originals.Count > 0)
             files.Add(new PackageFile(OriginalsFolderName + Path.DirectorySeparatorChar,
-                "the game's own record of each clip this package replaces: copied over its files in the unpacked datafile, they uninstall it"));
+                "the game's own file of each clip this package replaces, and your current mod of it as 1_-_...: delete the package's files and put these back to undo it"));
         files.AddRange(originals);
         files.Add(new PackageFile(MarkerName, "this tool's marker file (the package's name and the build time): only a folder carrying it is replaced by a later build"));
         if (clips.Count == 0) problem = "The package holds no clip yet: add an import or an edit first.";
@@ -241,32 +254,90 @@ public static class PackageBuild
     /// anywhere is no problem: the package is built without that original, and the screen names it (<see cref="MissingNote"/>).</summary>
     public static PackagePlan Plan(GameInstall g, IReadOnlyList<PackageItem> items, string packageName, string saveFolder, string? backupForge = null)
     {
-        var plan = Plan(items.Select(i => (i.Slot.Index, i.Slot.Name, i.Slot.Id)).ToList(), packageName, saveFolder, Protected(g));
         var originals = Originals(g, items, readForges: false, backupForge);
-        OriginalClip? Of(PackageFile f) => originals.FirstOrDefault(o => FileOf(o) is { } name && f.Name == Path.Combine(OriginalsFolderName, name));
-        plan = plan with
+        // the package's own files (named by the rows kept) and the marker; the originals are named below, each by its own record
+        var plan = Plan(items.Select(i => (0, i.Slot.Name, i.Slot.Id)).ToList(), packageName, saveFolder, Protected(g));
+        var kept = new List<PackageFile>();
+        // each original as it stands: from a forge, still to be looked for, or not found (the package is built without it)
+        foreach (var o in originals.Where(o => o.Missing is null))
         {
-            Originals = originals,
-            // each original as it stands: from a forge, not found (the package is built without it), or still to be looked for
-            Files = plan.Files.Where(f => Of(f) is not { Missing: not null })
-                .Select(f => Of(f) is not { } o ? f
-                : o.From == FromBaseForge ? f with { What = $"{f.What}, {FromBaseForgeWhy}" }
-                : o.From == FromBackupForge ? f with { What = $"{f.What}, {FromBackupForgeWhy}" }
-                : o.Pending ? f with { What = $"{f.What}, still to be looked for: your game folder holds a modded clip there" }
-                : f).ToList(),
-        };
+            if (FileOf(o) is not { } name) continue;
+            string what = $"the game's own {OriginalName(o)}";
+            kept.Add(new PackageFile(Path.Combine(OriginalsFolderName, name),
+                o.From == FromBaseForge ? $"{what}, {FromBaseForgeWhy}" : o.From == FromBackupForge ? $"{what}, {FromBackupForgeWhy}"
+                : o.Pending ? $"{what}, still to be looked for: your game folder holds a modded clip there" : what));
+        }
+        // the player's current mod of each clip, kept beside the game's own
+        kept.AddRange(originals.Where(o => CurrentFileOf(o) is not null).Select(o => new PackageFile(Path.Combine(OriginalsFolderName, CurrentFileOf(o)!),
+            $"your current {o.Slot.Name} ({Path.GetFileName(o.Current!.FilePath) ?? "the clip your game files hold"}): putting the originals back restores it")));
+        var files = plan.Files.Where(f => f.Name != MarkerName).ToList();
         // the originals folder isn't written when no original was found at all
-        if (originals.Count > 0 && originals.All(o => o.Missing is not null))
-            plan = plan with { Files = plan.Files.Where(f => f.Name != OriginalsFolderName + Path.DirectorySeparatorChar).ToList() };
+        if (kept.Count > 0)
+        {
+            files.Add(new PackageFile(OriginalsFolderName + Path.DirectorySeparatorChar,
+                "the game's own file of each clip this package replaces, and your current mod of it as 1_-_...: delete the package's files and put these back to undo it"));
+            files.AddRange(kept);
+        }
+        files.AddRange(plan.Files.Where(f => f.Name == MarkerName));
+        plan = plan with { Originals = originals, Files = files };
         return UnchangedProblem(g, items) is { } same ? plan with { Problem = same } : plan;
     }
 
-    /// <summary>The file name of an original's slot, or null when the name rules refuse it: no file of the plan is its file, and the
-    /// plan says the name as its problem.</summary>
+    /// <summary>The name an original is written under: its record's own name (the game's record of the clip, whatever the row kept was
+    /// named: a 1_-_ file may be named after another clip), or, before its record is found, the name of the install's clip of its ID.</summary>
+    static string OriginalName(OriginalClip o) => o.Record is { } r && RecordName(r) is { } n ? n : o.Slot.Name;
+
+    /// <summary>A whole record's own name (after its type and length), or null when it can't be read.</summary>
+    static string? RecordName(byte[] record)
+    {
+        if (record.Length < 12) return null;
+        int nl = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(record.AsSpan(8));
+        return nl >= 0 && nl <= record.Length - 12 ? System.Text.Encoding.ASCII.GetString(record, 12, nl) : null;
+    }
+
+    /// <summary>The file name of an original (<see cref="OriginalName"/>, under the game's own file's number), or null when its number
+    /// isn't known or the name rules refuse it: then no file is written for it.</summary>
     static string? FileOf(OriginalClip o)
     {
-        try { return RecordFile.ClipFileName(o.Slot.Index, o.Slot.Name, o.Slot.Id); }
+        if (o.Index is not int i) return null;
+        try { return RecordFile.ClipFileName(i, OriginalName(o), o.Slot.Id); }
         catch (RecordFileException) { return null; }
+    }
+
+    /// <summary>The originals folder's file of the player's current mod: <c>1_-_name.Animation</c>, as the package's own file is named.</summary>
+    /// <para>Null when the name rules refuse the mod's name (its file can't be written under it): it is then not kept.</para>
+    static string? CurrentFileOf(OriginalClip o)
+    {
+        var c = o.Current;
+        if (c is null) return null;
+        try { return RecordFile.ClipFileName(PackageFileIndex, c.Name, c.Id); }
+        catch (RecordFileException) { return null; }
+    }
+
+    /// <summary>The player's current mod of <paramref name="id"/>'s clip in <paramref name="g"/>: a modded file of the unpacked folder that
+    /// isn't the game's own clip, else the row the install loads when it isn't the game's own; null when there is none.</summary>
+    static ClipEntry? CurrentMod(GameInstall g, ulong id) =>
+        g.Clips.FirstOrDefault(c => c.Id == id && c.Modded && c.Record is not null && c.Status != ClipStatus.Vanilla)
+        ?? (g.FindClip(id) is { Record: not null } f && f.Status is ClipStatus.Replaced or ClipStatus.Added ? f : null);
+
+    /// <summary>The index of the game's own file of <paramref name="id"/>'s clip, known from the install: a row holding the game's own
+    /// record that isn't a modded file (its file's number, or its index in the forge's datafile); null when no row holds it.</summary>
+    /// <para>A row of the game's own bytes counts by the numbers of its files above <see cref="PackageFileIndex"/> (a 1_-_ copy of the
+    /// game's file beside it names it by the other); a forge row with no file by its index, unless it is modded.</para>
+    static int? VanillaIndexOf(GameInstall g, ulong id)
+    {
+        var numbers = new List<int>();
+        foreach (var c in g.Clips.Where(c => c.Id == id && c.Status == ClipStatus.Vanilla))
+        {
+            if (c.FileNumber is int n && n > PackageFileIndex) numbers.Add(n);
+            numbers.AddRange(c.SameFileNumbers.Where(x => x > PackageFileIndex));
+            if (c.FilePath is null && !c.Modded && c.Index > PackageFileIndex) numbers.Add(c.Index);
+        }
+        if (numbers.Count > 0) return numbers.Min();
+        // no file holds the game's own bytes: a file above 1 of this clip stands where the unpack put the game's file (a mod copied
+        // over it under its number), so that number is where the game's own goes back
+        var others = g.Clips.Where(c => c.Id == id && c.FilePath is not null && c.FileNumber is int n && n > PackageFileIndex).Select(c => c.FileNumber!.Value).ToList();
+        return others.Count > 0 ? others.Max() : null;
     }
 
     /// <summary>The game's own record of each item's clip, for the originals folder, from the user's own game files only: the install's
@@ -280,35 +351,48 @@ public static class PackageBuild
     {
         var l = new List<OriginalClip>();
         string? backup = string.IsNullOrWhiteSpace(backupForge) ? null : backupForge.Trim();
-        (Dictionary<ulong, byte[]>? Records, string? Error)? fromBase = null, fromBackup = null;
+        (Dictionary<ulong, ForgeRecord>? Records, string? Error)? fromBase = null, fromBackup = null;
         foreach (var i in items)
         {
-            var slot = g.FindClip(i.Slot.Id) ?? i.Slot;
+            var slot = i.Slot;
+            var current = CurrentMod(g, slot.Id);
+            // where the game's own file goes: its number in the unpacked folder or the install's datafile; else a forge backup's; else the
+            // slot's own index when the slot is the forge's row in its place (never a modded file's number)
+            int? index = VanillaIndexOf(g, slot.Id);
+            int? slotIndex = !slot.FromFile && !slot.Modded && slot.Index > PackageFileIndex ? slot.Index : null;
+            void Add(OriginalClip o, int? at = null)
+            {
+                int? n = index ?? at ?? slotIndex;
+                // a record found but with nowhere known to go is said as not found: a file under a wrong number could be loaded first
+                if (o.Record is not null && n is not > PackageFileIndex) o = o with { Record = null, From = null, Missing = "where the game's own file of it goes in the unpacked folder isn't known (no file or backup names its index)" };
+                l.Add(o with { Index = n, Current = current });
+            }
             if (g.Vanilla is not { } table)
             {
-                l.Add(new(slot, null, null, "this copy of the tool holds no table of the game's own clips, so it can't tell the game's own record"));
+                Add(new(slot, null, null, "this copy of the tool holds no table of the game's own clips, so it can't tell the game's own record"));
                 continue;
             }
             if (!table.Contains(slot.Id))
             {
-                l.Add(new(slot, null, null, "the game has no clip of this ID"));
+                Add(new(slot, null, null, "the game has no clip of this ID"));
                 continue;
             }
-            if (g.FindClip(slot.Id) is { } held && table.StatusOf(held.Id, held.Bytes.Span) == ClipStatus.Vanilla)
+            if (g.Clips.FirstOrDefault(c => c.Id == slot.Id && c.Status == ClipStatus.Vanilla && table.StatusOf(c.Id, c.Bytes.Span) == ClipStatus.Vanilla) is { } held)
             {
-                l.Add(new(held, held.Bytes.ToArray(), FromInstall, null));
+                Add(new(held, held.Bytes.ToArray(), FromInstall, null));
                 continue;
             }
             // the user's vanilla forge backup first (when named), then the base forge; a forge not read yet leaves the clip pending
             if (backup is not null)
             {
                 fromBackup ??= ForgeOriginals(g, backup, readForges);
-                if (fromBackup is not { } k) { l.Add(new(slot, null, null, null)); continue; }
-                if (k.Records?.GetValueOrDefault(slot.Id) is { } rk) { l.Add(new(slot, rk, FromBackupForge, null)); continue; }
+                if (fromBackup is not { } k) { Add(new(slot, null, null, null)); continue; }
+                if (k.Records is { } kr && kr.TryGetValue(slot.Id, out var rk)) { Add(new(slot, rk.Bytes, FromBackupForge, null), rk.Index); continue; }
             }
             fromBase ??= ForgeOriginals(g, BaseForgeInTests.Value ?? g.BaseForgePath, readForges);
-            if (fromBase is not { } b) l.Add(new(slot, null, null, null));
-            else if (b.Records?.GetValueOrDefault(slot.Id) is { } rec) l.Add(new(slot, rec, FromBaseForge, null));
+            if (fromBase is not { } b) Add(new(slot, null, null, null));
+            // the base forge's own datafile numbers its records its own way: its index never names the file
+            else if (b.Records is { } br && br.TryGetValue(slot.Id, out var rec)) Add(new(slot, rec.Bytes, FromBaseForge, null));
             else
             {
                 var why = new List<string> { "your game folder holds a modded clip there" };
@@ -316,7 +400,7 @@ public static class PackageBuild
                 else why.Add(!File.Exists(backup) ? $"your vanilla forge backup isn't there any more: {backup}"
                     : fromBackup?.Error is { } be ? $"your vanilla forge backup couldn't be read: {Plain(be)}" : "your vanilla forge backup doesn't hold the game's own record of it");
                 why.Add(b.Error is { } err ? $"{GameInstall.BaseForgeName} couldn't be read: {Plain(err)}" : $"{GameInstall.BaseForgeName} doesn't hold it either");
-                l.Add(new(slot, null, null, string.Join(", ", why)));
+                Add(new(slot, null, null, string.Join(", ", why)));
             }
         }
         return l;
@@ -327,10 +411,13 @@ public static class PackageBuild
     /// next read tries again (never kept as the result); null when it isn't read yet, or is being read, and <paramref name="read"/> is
     /// false. The read itself runs outside the lock: a look without reading (the screen's plan, on the window's thread) never waits for a
     /// read in progress, it finds the forge still to be looked in; a second read of the same forge waits for the first.</summary>
-    static (Dictionary<ulong, byte[]>? Records, string? Error)? ForgeOriginals(GameInstall g, string forge, bool read)
+    /// <summary>A game's own clip record found in a forge, with its index in that forge's datafile.</summary>
+    internal readonly record struct ForgeRecord(byte[] Bytes, int Index);
+
+    static (Dictionary<ulong, ForgeRecord>? Records, string? Error)? ForgeOriginals(GameInstall g, string forge, bool read)
     {
-        TaskCompletionSource<(Dictionary<ulong, byte[]>?, string?)>? mine = null;
-        Task<(Dictionary<ulong, byte[]>?, string?)> reading;
+        TaskCompletionSource<(Dictionary<ulong, ForgeRecord>?, string?)>? mine = null;
+        Task<(Dictionary<ulong, ForgeRecord>?, string?)> reading;
         lock (BaseRead)
         {
             var kept = BaseRead.GetOrCreateValue(g);
@@ -349,13 +436,13 @@ public static class PackageBuild
             }
         }
         if (mine is null) return reading.GetAwaiter().GetResult();
-        (Dictionary<ulong, byte[]>? Records, string? Error) result;
+        (Dictionary<ulong, ForgeRecord>? Records, string? Error) result;
         try
         {
             var (_, records) = GameInstall.ReadAnimationDatafile(forge, g.Oodle);
-            var d = new Dictionary<ulong, byte[]>();
+            var d = new Dictionary<ulong, ForgeRecord>();
             foreach (var r in records)
-                if (r.Type == Clips.ClipRecord.Type && g.Vanilla?.StatusOf(r.Id, r.Bytes.Span) == ClipStatus.Vanilla) d.TryAdd(r.Id, r.Bytes.ToArray());
+                if (r.Type == Clips.ClipRecord.Type && g.Vanilla?.StatusOf(r.Id, r.Bytes.Span) == ClipStatus.Vanilla) d.TryAdd(r.Id, new ForgeRecord(r.Bytes.ToArray(), r.Index));
             result = (d, null);
         }
         // a base forge that doesn't hold the animation datafile, or can't be read, finds no original. Not kept: the cause may pass (the
@@ -389,7 +476,7 @@ public static class PackageBuild
     }
 
     /// <summary>The forge reads in progress for each install, by the forge's path: what a second read of the same forge waits for.</summary>
-    static readonly ConditionalWeakTable<GameInstall, Dictionary<string, Task<(Dictionary<ulong, byte[]>?, string?)>>> Reading = new();
+    static readonly ConditionalWeakTable<GameInstall, Dictionary<string, Task<(Dictionary<ulong, ForgeRecord>?, string?)>>> Reading = new();
 
     /// <summary>Whether a forge is being read for the originals of <paramref name="g"/> now (for tests).</summary>
     internal static bool ReadInProgress(GameInstall g, string forge)
@@ -414,7 +501,7 @@ public static class PackageBuild
     static readonly ConditionalWeakTable<GameInstall, Dictionary<string, string>> BaseReadFailed = new();
 
     /// <summary>The base forge's records read for each install, by the forge's path.</summary>
-    static readonly ConditionalWeakTable<GameInstall, Dictionary<string, (Dictionary<ulong, byte[]>? Records, string? Error)>> BaseRead = new();
+    static readonly ConditionalWeakTable<GameInstall, Dictionary<string, (Dictionary<ulong, ForgeRecord>? Records, string? Error)>> BaseRead = new();
 
     /// <summary>A forge that stands for the base forge on this flow of work, for tests; null otherwise.</summary>
     internal static readonly AsyncLocal<string?> BaseForgeInTests = new();
@@ -449,7 +536,31 @@ public static class PackageBuild
             s.Add($"Your game folder holds a modded clip in place of {string.Join(", ", pending.Select(o => o.Slot.Name))}: looking for the game's own record "
                 + $"for \"{OriginalsFolderName}\"...");
         if (MissingNote(originals) is { } m) s.Add(m);
+        if (ReplacesModNote(originals) is { } r) s.Add(r);
         return s.Count == 0 ? null : string.Join(" ", s);
+    }
+
+    /// <summary>The warning for each clip the player's game files already hold a mod of (<see cref="OriginalClip.Current"/>): installing
+    /// the package replaces it; it is kept in the originals folder as <c>1_-_name</c>, so putting the originals back restores it. Null when
+    /// there is none.</summary>
+    public static string? ReplacesModNote(IReadOnlyList<OriginalClip> originals)
+    {
+        var all = originals.Where(o => o.Current is not null).ToList();
+        if (all.Count == 0) return null;
+        static string Named(OriginalClip o) => o.Current!.FilePath is { } f ? $"{o.Slot.Name} ({Path.GetFileName(f)})" : o.Slot.Name;
+        var s = new List<string>();
+        var mods = all.Where(o => CurrentFileOf(o) is not null).ToList();
+        if (mods.Count > 0)
+        {
+            bool one = mods.Count == 1;
+            s.Add($"Your game files already hold a mod of {string.Join(", ", mods.Select(Named))}: installing this package replaces {(one ? "it" : "them")}. "
+                + $"{(one ? "It is" : "They are")} kept in \"{OriginalsFolderName}\" as 1_-_..., so putting the originals back restores {(one ? "it" : "them")}.");
+        }
+        // a mod whose name the record files can't carry is not copied: said, so the player keeps it before installing
+        foreach (var o in all.Where(o => CurrentFileOf(o) is null))
+            s.Add($"Your game files hold a mod of {Named(o)} whose name a record file can't keep, so it is NOT kept in \"{OriginalsFolderName}\": "
+                + "move that file out of the folder, somewhere of your own, before installing this package (two 1_-_ files of one clip leave which one loads unknown).");
+        return string.Join(" ", s);
     }
 
     /// <summary>Why the items can't be packaged as they stand because one is no change (<see cref="PackageEntries.Unchanged(GameInstall,
@@ -480,9 +591,14 @@ public static class PackageBuild
         if (plan.Problem is { } p) throw new RecordFileException(p);
         var originals = Originals(g, items, readForges: true, backupForge);
         // a clip whose original wasn't found is built without it (said on the screen and in the result); no original at all: no folder
-        var found = originals.Where(o => o.Record is not null).ToList();
-        var built = Build(plan, folder => RecordFileWriter.Write(g, folder, items.Select(i => (i.Slot, i.Record))),
-            found.Count == 0 ? null : folder => RecordFileWriter.Write(g, folder, found.Select(o => (o.Slot, o.Record!))), replace, Protected(g));
+        // each original under its own record's name, as the plan lists it
+        var kept = originals.Where(o => o.Record is not null && FileOf(o) is not null).Select(o => new RecordFileItem(o.Index!.Value, OriginalName(o), o.Slot.Id, o.Record!))
+            .Concat(originals.Where(o => CurrentFileOf(o) is not null).Select(o => new RecordFileItem(PackageFileIndex, o.Current!.Name, o.Current.Id, o.Current.Bytes.ToArray())))
+            .ToList();
+        var protect = Protected(g);
+        var built = Build(plan, folder => RecordFileWriter.Write(folder, g.RecordFolderName, protect,
+                items.Select(i => new RecordFileItem(PackageFileIndex, i.Slot.Name, i.Slot.Id, i.Record)).ToList()),
+            kept.Count == 0 ? null : folder => RecordFileWriter.Write(folder, g.RecordFolderName, protect, kept), replace, protect);
         return built with { Originals = originals };
     }
 
@@ -688,7 +804,7 @@ public static class PackageBuild
             return $"{final} isn't a package this tool built (it has no {MarkerName} marker file), so it isn't replaced: give the package another name or pick another save folder. Nothing was written.";
         if (!IsEarlierBuild(final, MarkedName(plan), restore: false))
             return $"{final} is a package this tool built, but its marker file names another package than \"{MarkedName(plan)}\" (or it is a folder of the game's own files a "
-                + "pre-release build of this tool wrote beside a package), so it isn't replaced: give the package another name or pick another save folder. Nothing was written.";
+                + "an earlier version of this tool wrote beside a package), so it isn't replaced: give the package another name or pick another save folder. Nothing was written.";
         var foreign = Directory.EnumerateFileSystemEntries(final).Where(e => !IsPackageFile(e) && !IsOriginalsFolder(e)).Take(3).ToList();
         if (foreign.Count > 0)
             return $"{final} holds things a package doesn't ({string.Join(", ", foreign.Select(Path.GetFileName))}), so it isn't replaced: give the package another name. Nothing was written.";
