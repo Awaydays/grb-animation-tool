@@ -42,7 +42,9 @@ public static class ImportOutput
             if (ReportTargetRefusal(reportFolder!, reports.Select(x => x.Item1), overwrite) is { } taken)
                 throw new RecordFileException($"Report folder: {taken} {NothingWritten}");
         }
-        var pkg = RecordFileWriter.Write(folder, g.RecordFolderName, protect, items, apart ? [] : reports, overwrite);
+        // the folder the files go into: the one datafile's they are all of (the animation datafile's for most)
+        var folders = results.Select(r => RecordFileWriter.FolderOf(g, r.Slot)).Distinct().ToList();
+        var pkg = RecordFileWriter.Write(folder, folders.Count == 1 ? folders[0] : string.Join(", ", folders), protect, items, apart ? [] : reports, overwrite);
         if (!apart) return new ImportFiles(pkg, pkg.ExtraFiles.Select(f => f.Path).ToList());
         try
         {

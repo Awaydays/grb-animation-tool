@@ -136,6 +136,15 @@ public sealed class PackageBuiltTests
                 p.FolderBox.Text = dir;
                 p.Refresh();
                 Assert.True(p.BuildButton.IsEnabled, p.ProblemText.Text);
+                // Remove follows the selection: a kept row selected can be removed, until a search hides it
+                Assert.NotNull(p.ItemsPanel.Select(hello));
+                Assert.True(p.RemoveButton.IsEnabled);
+                p.ItemsPanel.SearchBox.Text = "idle_03";
+                p.ItemsPanel.Apply();
+                Assert.DoesNotContain(hello, p.ItemsPanel.Rows);
+                Assert.False(p.RemoveButton.IsEnabled);
+                p.ItemsPanel.SearchBox.Text = "";
+                p.ItemsPanel.Apply();
                 Assert.Null(await p.BuildAsync());
 
                 // the package folder as before: the record files, the original clips and the marker

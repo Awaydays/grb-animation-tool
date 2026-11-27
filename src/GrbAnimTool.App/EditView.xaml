@@ -300,13 +300,27 @@
                             <RadioButton x:Name="FromGlbChoice" GroupName="ReplaceSource" Content=".glb file" Checked="OnReplaceChanged" />
                         </WrapPanel>
                         <StackPanel x:Name="FromClipPanel">
-                            <TextBox x:Name="ReplaceSearch" Margin="0,2" TextChanged="OnReplaceSearch" ToolTip="Words of the source clip's name, or its ID in hex, as the Library's search takes them" />
+                            <DockPanel>
+                                <CheckBox x:Name="ShowEveryClipBox" DockPanel.Dock="Right" Content="Show every clip" VerticalAlignment="Center" Margin="6,0,0,0"
+                                          Checked="OnShowEveryClip" Unchecked="OnShowEveryClip"
+                                          ToolTip="Also lists the clips this clip can't take (on another skeleton whose bones don't map onto its own), greyed, each with why" />
+                                <TextBox x:Name="ReplaceSearch" Margin="0,2" TextChanged="OnReplaceSearch" ToolTip="Words of the source clip's name, or its ID in hex, as the Library's search takes them" />
+                            </DockPanel>
+                            <!-- only the clips the clip (or every clip ticked) can take: on its skeleton, or one whose bones map onto it; with Show
+                                 every clip the others too, greyed, with why -->
                             <ListBox x:Name="ReplaceList" Height="120" SelectionChanged="OnReplaceSourceChosen" VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                        <Setter Property="IsEnabled" Value="{Binding Takes, Mode=OneWay}" />
+                                        <Setter Property="ToolTip" Value="{Binding Refusal, Mode=OneWay}" />
+                                        <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
                                 <ListBox.ItemTemplate>
                                     <DataTemplate>
                                         <TextBlock TextTrimming="CharacterEllipsis" FontSize="11">
-                                            <Run Text="{Binding Name, Mode=OneWay}" /><Run Text="  " /><Run Text="{Binding Duration, Mode=OneWay, StringFormat=F3}" /><Run Text=" s  " /><Run Text="{Binding StatusText, Mode=OneWay}" Foreground="{DynamicResource Grb.TextSecondary}" />
+                                            <Run Text="{Binding Name, Mode=OneWay}" /><Run Text="  " /><Run Text="{Binding Duration, Mode=OneWay, StringFormat=F3}" /><Run Text=" s  " /><Run Text="{Binding Note, Mode=OneWay}" Foreground="{DynamicResource Grb.TextSecondary}" />
                                         </TextBlock>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
@@ -344,6 +358,71 @@
                             <local:NumberBox x:Name="RootScaleBox" Width="48" Text="1" TextChanged="OnReplaceNumbers" ToolTip="How far the source's root travels here: 1 as it is, 0 stays in place (its turn kept)" />
                             <TextBlock Text="x  (0 = stays in place)" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,0,0" />
                         </StackPanel>
+                        <!-- the clip's set: Replace for the whole set (or the clips ticked), lined up so the switches don't jump, and its preview -->
+                        <StackPanel x:Name="SetPanel" Margin="0,6,0,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Set" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <local:HelpButton x:Name="EditSetHelp" Heading="Set" Text="{x:Static lib:HelpTexts.Set}" />
+                                <local:HelpButton x:Name="EditProbableSetHelp" Heading="Probable set" Text="{x:Static lib:HelpTexts.ProbableSet}" Visibility="Collapsed" />
+                            </StackPanel>
+                            <TextBlock x:Name="EditSetText" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Grb.TextSecondary}" Text="-" />
+                            <CheckBox x:Name="WholeSetBox" Content="Replace the set: every clip ticked below" Margin="0,2,0,0" IsEnabled="False"
+                                      Checked="OnSetChanged" Unchecked="OnSetChanged"
+                                      ToolTip="Puts the source on every clip ticked, each fitted to its own length, so the clips the game switches between match." />
+                            <StackPanel x:Name="SetOptionsPanel" Visibility="Collapsed" Margin="20,0,0,0">
+                                <!-- each clip's piece: where it starts in the source, given or suggested -->
+                                <StackPanel x:Name="PieceHead" Orientation="Horizontal">
+                                    <TextBlock Text="Each clip, and where its piece starts in the source" FontSize="11" Foreground="{DynamicResource Grb.TextSecondary}" VerticalAlignment="Center" />
+                                    <local:HelpButton x:Name="PieceStartHelp" Heading="Start" Text="{x:Static lib:HelpTexts.PieceStart}" />
+                                    <Button x:Name="SuggestPiecesButton" Content="Suggest" Click="OnSuggestPieces" Margin="6,0,0,0" Padding="6,0"
+                                            ToolTip="Works out every clip's start anew: the pieces sharing as little of the source as their lengths allow, the feet lined up." />
+                                </StackPanel>
+                                <!-- as tall as its clips: the side panel's own scroll bar scrolls it, the list has none of its own -->
+                                <ListBox x:Name="SetClipList" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                         SelectionChanged="OnSetRowChosen" HorizontalContentAlignment="Stretch">
+                                    <ListBox.Template>
+                                        <ControlTemplate TargetType="ListBox">
+                                            <Border BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Background="{TemplateBinding Background}">
+                                                <ItemsPresenter />
+                                            </Border>
+                                        </ControlTemplate>
+                                    </ListBox.Template>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel>
+                                                <local:NumberBox DockPanel.Dock="Right" Width="56" Text="{Binding Start, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                 Visibility="{Binding StartShown, Mode=OneWay}" TextChanged="OnPieceStartChanged" Margin="4,0,0,0"
+                                                                 ToolTip="{x:Static lib:HelpTexts.PieceStart}" />
+                                                <CheckBox IsChecked="{Binding Ticked, Mode=TwoWay}" Checked="OnSetChanged" Unchecked="OnSetChanged">
+                                                    <TextBlock FontSize="11" TextTrimming="CharacterEllipsis"><Run Text="{Binding Clip.Name, Mode=OneWay}" /><Run Text="  " /><Run Text="{Binding Clip.LastTick, Mode=OneWay}" /><Run Text=" ticks" /><Run Text="{Binding SourceText, Mode=OneWay}" Foreground="{DynamicResource Grb.TextSecondary}" /></TextBlock>
+                                                </CheckBox>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <WrapPanel>
+                                    <RadioButton x:Name="OneSourceChoice" GroupName="SetSource" Content="One source for all" IsChecked="True" Margin="0,0,10,0" Checked="OnSetChanged" />
+                                    <RadioButton x:Name="PerClipSourceChoice" GroupName="SetSource" Content="A source per clip" Checked="OnSetChanged"
+                                                 ToolTip="Select a clip in the list, then choose its source above (a game clip or a .glb)." />
+                                </WrapPanel>
+                                <TextBlock x:Name="BlendedOneSourceWarning" Style="{StaticResource Warning}" Margin="0,0,0,2" Visibility="Collapsed" />
+                                <CheckBox x:Name="DistinctPiecesBox" Content="Each clip its own piece of the source" IsChecked="True" Checked="OnSetChanged" Unchecked="OnSetChanged"
+                                          ToolTip="With Cut and one long source: no two clips take the same piece where the source is long enough, each starting where its piece's loop closes best. Off for a blended set, whose clips need matching poses." />
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox x:Name="LineUpBox" Content="Line up the set" IsChecked="True" VerticalAlignment="Center" Checked="OnSetChanged" Unchecked="OnSetChanged" />
+                                    <local:HelpButton x:Name="LineUpHelp" Heading="Line up the set" Text="{x:Static lib:HelpTexts.LineUpSet}" />
+                                </StackPanel>
+                                <WrapPanel Margin="20,0,0,0">
+                                    <CheckBox x:Name="PoseFrameChoice" Content="On the source's frame" VerticalAlignment="Center" Checked="OnSetChanged" Unchecked="OnSetChanged"
+                                              ToolTip="Lines the set up on this frame of the source (the first clip's source); unticked, on the pose closest to all the clips' pieces." />
+                                    <local:NumberBox x:Name="PoseFrameBox" Width="56" Text="0" Margin="6,0,0,0" TextChanged="OnReplaceNumbers" />
+                                </WrapPanel>
+                            </StackPanel>
+                            <Button x:Name="PreviewSetButton" Content="Preview the set" HorizontalAlignment="Left" Margin="0,4,0,0" Click="OnPreviewSet" IsEnabled="False"
+                                    ToolTipService.ShowOnDisabled="True"
+                                    ToolTip="Plays the set's clips one after another, as the game switches between them, with a short blend between: the results once applied, else the game's own clips." />
+                            <TextBlock x:Name="SetResultText" TextWrapping="Wrap" FontSize="11" Margin="0,2,0,0" />
+                        </StackPanel>
                         <TextBlock x:Name="TrackMapText" TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,4,0,0" />
                     </StackPanel>
                 </StackPanel>
@@ -369,7 +448,10 @@
 
                 <DockPanel Grid.Row="3" Margin="0,8,0,0">
                     <StackPanel x:Name="ChecksHead" DockPanel.Dock="Top">
-                        <TextBlock Text="Checks" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,2" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock Text="Checks" FontWeight="SemiBold" FontSize="14" />
+                            <local:HelpButton x:Name="ChecksHelp" Heading="Checks" Text="{x:Static lib:HelpTexts.Checks}" />
+                        </StackPanel>
                         <TextBlock x:Name="VerdictText" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,4" Text="Nothing applied yet." />
                     </StackPanel>
                     <!-- the right padding keeps the checks' text clear of the theme's scroll bar, which lies over the list's right edge; the
@@ -382,6 +464,7 @@
                                     <Border DockPanel.Dock="Left" Style="{StaticResource Badge}" Margin="0,0,6,0" VerticalAlignment="Top">
                                         <TextBlock Text="{Binding Word}" Style="{StaticResource BadgeWord}" />
                                     </Border>
+                                    <local:HelpButton DockPanel.Dock="Right" VerticalAlignment="Top" Heading="Feet slide" Text="{Binding Help, Mode=OneWay}" Visibility="{Binding HelpShown, Mode=OneWay}" />
                                     <TextBlock TextWrapping="Wrap">
                                         <Run Text="{Binding Check, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=": " /><Run Text="{Binding Text, Mode=OneWay}" />
                                     </TextBlock>

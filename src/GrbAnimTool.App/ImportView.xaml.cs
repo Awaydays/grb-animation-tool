@@ -37,6 +37,7 @@ public partial class ImportView : UserControl
     bool _busy;
     int _runId;
     int _glbReadId;   // the file read's own id (see ChooseGlbAsync)
+    bool _readingGlb; // a file chosen and still being read: the result shown is the file before's
 
     /// <summary>The last import's result, or null when it was refused or none ran.</summary>
     public ImportResult? Result => _result;
@@ -130,9 +131,17 @@ public partial class ImportView : UserControl
         _importHolder.Children.Clear();
         GlbText.Text = _glbPath ?? "No file chosen.";
         ChooseGlbButton.IsEnabled = true;
-        SlotPanel.SetClips(g.Clips);
+        SlotPanel.SetClips(g.AllClips);
         ApplyLength();
         ShowResult();
+        // the list's Set filter opens once the install's sets are worked out
+        _ = TakeSetsAsync(g);
+    }
+
+    async Task TakeSetsAsync(GameInstall g)
+    {
+        var sets = await InstallWork.Sets(g);
+        if (ReferenceEquals(g, _install)) SlotPanel.SetSets(sets);
     }
 
     // ---- the file ----
@@ -180,6 +189,9 @@ public partial class ImportView : UserControl
         GlbText.Text = glb;
         _glbTicks = null;
         GlbInfo.Text = "";
+        // the result on the screen is the last file's: Keep and Export wait until this file is read and imported
+        _readingGlb = true;
+        UpdateButtons();
         try
         {
             var scene = await Task.Run(() => GlbScene.Read(glb));
@@ -202,10 +214,12 @@ public partial class ImportView : UserControl
             // anything else (out of memory on a huge file, say) is shown too, never left to end the program
             GlbInfo.Text = $"This file can't be read ({ex.GetType().Name}): {ex.Message}";
         }
+        _readingGlb = false;
+        UpdateButtons();
         ApplyLength();
         if (!pickNamed) return;
         // the slot the file is named after (as the tool's own exports are), selected as a click would select it: that runs the import
-        if (_install is not null && _slot is null && ClipQuery.Find(_install.Clips, Path.GetFileNameWithoutExtension(glb)) is { } named && SlotPanel.Rows.Contains(named))
+        if (_install is not null && _slot is null && ClipQuery.Find(_install.AllClips, Path.GetFileNameWithoutExtension(glb)) is { } named && SlotPanel.Rows.Contains(named))
             SlotPanel.Select(named.Name);
         else await RunAsync();
     }
@@ -304,7 +318,7 @@ public partial class ImportView : UserControl
     public async Task<string?> ChooseSlotAsync(string clip)
     {
         if (_install is null) return "Open your game folder on the Library screen first.";
-        var c = ClipQuery.Find(_install.Clips, clip);
+        var c = ClipQuery.Find(_install.AllClips, clip);
         if (c is null) return $"No clip named or with the ID '{clip}' in this game folder.";
         if (!SlotPanel.Rows.Contains(c))
         {
@@ -399,15 +413,22 @@ public partial class ImportView : UserControl
         {
             // the failures first, then the warnings, then the passes, each in the checks' own order (the sort is stable), so what needs
             // a look is in sight without a scroll
-            ReportList.ItemsSource = r.Report.Results.OrderByDescending(x => x.Level).Select(x => new ReportRow(CheckResult.Word(x.Level), x.Level, x.Check,
-                x.Message + (x.Tick is int t ? $" (tick {t}{(x.Bone is null ? "" : $", {x.Bone}")})" : x.Bone is null ? "" : $" ({x.Bone})"))).ToList();
+            ReportList.ItemsSource = EditView.ReportRows(r.Report);
             var v = r.Report.Verdict;
-            VerdictText.Text = $"{CheckResult.Word(v)}: {r.Report.Count(CheckLevel.Pass)} pass, {r.Report.Count(CheckLevel.Warn)} warn, {r.Report.Count(CheckLevel.Fail)} fail. "
-                + $"{r.Written} tracks written, {r.Kept} kept as the game's."
-                + (v == CheckLevel.Fail ? " A failed check means the clip may look wrong in game: look at the lines in red before keeping it." : "");
+            VerdictText.Text = $"{r.Report.Headline} {r.Written} tracks written, {r.Kept} kept as the game's."
+                + (v == CheckLevel.Fail ? " A failed game check means the game may not play it correctly, so it can't be added to the package: look at the lines in red." : "");
             VerdictText.SetResourceReference(TextBlock.ForegroundProperty, Theme.TextKeyOf(v));
             int head = r.Game.Bone("Head");
             var face = head >= 0 ? SkeletonScene.FaceAxis(r.Game.Model(0, head).Rotation) : (NVector3?)null;
+            // a clip of another skeleton than the body's: its scenes drawn on it
+            if (!ReferenceEquals(_gameScene?.Skeleton, r.Game.Skeleton))
+            {
+                var sk = r.Game.Skeleton;
+                _gameScene = new SkeletonScene(sk);
+                _gameGhost = new SkeletonScene(sk, ghost: true);
+                _importScene = new SkeletonScene(sk, second: true);
+                _model = new Transform[sk.Bones.Count];
+            }
             _gameScene!.NoseAxis = _gameGhost!.NoseAxis = _importScene!.NoseAxis = face;
             _gameScene.ShowAddOnFor(r.Slot.Record!.Tracks);
             _gameGhost.ShowAddOnFor(r.Slot.Record!.Tracks);
@@ -431,6 +452,10 @@ public partial class ImportView : UserControl
     /// <summary>Why the result isn't kept or exported, or null: it is the game's own clip unchanged, or what the install already holds
     /// for the clip (an import of an unedited export, say, or of the builder's own clip on an install holding it), so it replaces nothing.</summary>
     string? Unchanged => _result is { } r && _install is { } g ? PackageEntries.Unchanged(g, r.Slot, r.Record) : null;
+
+    /// <summary>Why the result can't be added to the package, or null: no change (<see cref="Unchanged"/>), or a game check failed
+    /// (<see cref="PackageEntries.NotForPackage"/>). A look check never stops it.</summary>
+    string? NotKeepable => Unchanged ?? (_result is { } r ? PackageEntries.NotForPackage(r.Report.Verdict) : null);
 
     /// <summary>A fit option changed: the import made again with it, once typing in the start box pauses, so the result shown (and kept)
     /// is always the one the options give.</summary>
@@ -473,12 +498,15 @@ public partial class ImportView : UserControl
         _exportTip ??= ExportButton.ToolTip;
         // an import that changes nothing is greyed with its reason: the game's own record is the game's file, never packaged
         string? same = _busy ? null : Unchanged;
-        KeepButton.IsEnabled = _result is not null && !_busy && same is null;
+        // a failed game check keeps it out of the package; it can still be exported to try
+        string? failed = _busy || same is not null || _result is null ? null : PackageEntries.NotForPackage(_result.Report.Verdict);
+        bool usable = _result is not null && !_busy && !_readingGlb && same is null;
+        KeepButton.IsEnabled = usable && failed is null;
         // nothing is written before who plays the clip is on the screen: while the clip index is read, Export waits for it (greyed,
         // with the index's progress under it), as the Package screen's Build does; keeping writes nothing, and the package waits itself
-        bool waiting = KeepButton.IsEnabled && IndexPending;
-        ExportButton.IsEnabled = KeepButton.IsEnabled && !waiting;
-        KeepButton.ToolTip = same is null ? _keepTip : $"Not for the package: {same}.";
+        bool waiting = usable && IndexPending;
+        ExportButton.IsEnabled = usable && !waiting;
+        KeepButton.ToolTip = (same ?? failed) is { } why ? $"Not for the package: {why}." : _keepTip;
         ExportButton.ToolTip = same is null ? _exportTip : $"Not exported: {same}.";
         ExportWaitText.Text = waiting
             ? $"Waiting for the clip index: {LibraryView.IndexStage(_indexProgress)}. Export opens once it is ready and Played by says who plays the clip."
@@ -486,9 +514,9 @@ public partial class ImportView : UserControl
         ExportWaitText.Visibility = waiting ? Visibility.Visible : Visibility.Collapsed;
         // both buttons are greyed, so the reason names both; only the game's own clip unchanged is to be changed and imported again: what
         // the install holds may be the builder's own installed clip, whose reason says the way out (an import on game files that don't hold it)
-        KeepReasonText.Text = same is null ? ""
+        KeepReasonText.Text = failed is not null ? $"Not added: {failed}." : same is null ? ""
             : $"Not added or exported: {same}." + (same == PackageEntries.GamesOwnUnchanged ? " Change the clip and import it again." : "");
-        KeepReasonText.Visibility = same is null ? Visibility.Collapsed : Visibility.Visible;
+        KeepReasonText.Visibility = same is null && failed is null ? Visibility.Collapsed : Visibility.Visible;
         // an import made but not in the package is said, until it is kept or another is made
         NotKeptText.Visibility = KeepButton.IsEnabled && _result is { } r
             && !PackageList.Current.Items.Any(i => i.Slot.Id == r.Slot.Id && i.Record.AsSpan().SequenceEqual(r.Record)) ? Visibility.Visible : Visibility.Collapsed;
@@ -501,7 +529,7 @@ public partial class ImportView : UserControl
     {
         var items = PackageList.Current.Items;
         PackageText.Text = items.Count == 0 ? "In the package: none yet."
-            : $"In the package ({items.Count}): " + string.Join(", ", items.Select(i => $"{i.Slot.Name} ({CheckResult.Word(i.Verdict)})"));
+            : $"In the package ({items.Count}): " + string.Join(", ", items.Select(i => $"{i.Slot.Name} ({CheckResult.Word(PackageEntries.GameVerdict(i))})"));
     }
 
     void OnKeep(object sender, RoutedEventArgs e) => Guarded(async () =>
@@ -531,7 +559,7 @@ public partial class ImportView : UserControl
     {
         await FlushFitAsync();
         if (_result is null) return "Nothing imported to add.";
-        if (Unchanged is { } same) return $"Not added: {_result.Slot.Name}: {same}.";
+        if (NotKeepable is { } why) return $"Not added: {_result.Slot.Name}: {why}.";
         bool replaced = PackageList.Current.Keep(_result);
         StatusText.Text = $"Added {_result.Slot.Name} to the package{(replaced ? ", in place of the one added before for this clip" : "")}.";
         return null;

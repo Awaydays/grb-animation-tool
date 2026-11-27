@@ -68,22 +68,32 @@ public static class UnpackedFolder
             foreach (var (f, others) in kinds)
             {
                 bool loadsFirst = files.Count > 1 && f.Number is not null && f.Number == lowest && !orderUnknown;
+                // the game's own file in its own place (its number the record's index): loading first doesn't make it a mod (a small
+                // datafile's clip at record 0 loads before any 1_-_ file)
+                bool ownPlace = forge is not null && f.Number == forge.Index;
                 // by its name or load order, or by its bytes: a file that isn't the game's own by the table of the game's clips (one
                 // copied over the game's file under its number, say) is the player's mod too
-                bool modded = f.Number == 1 || loadsFirst
+                bool modded = f.Number == 1 && !ownPlace || loadsFirst && !ownPlace
                     || f.Record is { } fr && f.Id is { } frId && vanilla?.StatusOf(frId, fr) is ClipStatus.Replaced or ClipStatus.Added;
                 string? note = Note(f, forge, files.Count, orderUnknown);
+                // a 1_-_ file that a lower number loads before (a small datafile's record 0): said, the game doesn't use it
+                if (f.Number == 1 && lowest is int lo && lo < 1 && !orderUnknown)
+                    note = (note is null ? "" : note + "; ") + $"the game loads the file numbered {lo} first, so this one isn't used: give it the game's own file's name ({lo}_-_...) in its place";
                 if (forge is not null && forgeContent is not null && f.Content is not null && f.Content.AsSpan().SequenceEqual(forgeContent) && !attached.ContainsKey(forge))
                 {
                     attached[forge] = Copy(forge, f, modded, note, others);
                     continue;
                 }
+                // the folder's datafile, and the skeleton of the forge's clip of this ID (else the datafile's first clip's)
+                var like = forge ?? (forgeRows.Count > 0 ? forgeRows[0] : null);
                 var row = new ClipEntry
                 {
                     Index = f.Number ?? -1, Id = f.Id ?? id, Name = f.Name, Bytes = f.Record ?? [], Record = f.Clip, ParseError = f.Error,
                     Status = f.Record is { } rec && f.Id is { } fid ? vanilla?.StatusOf(fid, rec) ?? ClipStatus.Unknown : ClipStatus.Unknown,
                     FilePath = f.Path, FileNumber = f.Number, FromFile = true, Modded = modded, Note = note, SameFileNumbers = others,
                     Key = RowKeyOf(id, f.Content ?? System.Text.Encoding.UTF8.GetBytes(f.Path)),
+                    DatafileName = like?.DatafileName ?? "", DatafileIndex = like?.DatafileIndex ?? 0, DatafileId = like?.DatafileId ?? 0,
+                    InPatchForge = like?.InPatchForge ?? true, OnSkeleton = like?.OnSkeleton ?? Skeletons.ClipSkeleton.Body, AlsoIn = forge?.AlsoIn ?? [],
                 };
                 (extra.TryGetValue(id, out var l) ? l : extra[id] = []).Add(row);
             }
@@ -118,6 +128,8 @@ public static class UnpackedFolder
     {
         Index = c.Index, Id = c.Id, Name = c.Name, Bytes = c.Bytes, Record = c.Record, ParseError = c.ParseError, Status = c.Status,
         FilePath = f.Path, FileNumber = f.Number, Modded = modded, Note = note, SameFileNumbers = others,
+        DatafileName = c.DatafileName, DatafileIndex = c.DatafileIndex, DatafileId = c.DatafileId, InPatchForge = c.InPatchForge,
+        OnSkeleton = c.OnSkeleton, AlsoIn = c.AlsoIn, Key = c.FromFile || c.Key == c.Id ? 0 : c.Key,
     };
 
     static byte[]? ContentOf(ClipEntry c)

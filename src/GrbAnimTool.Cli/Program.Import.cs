@@ -63,12 +63,14 @@ static partial class Program
         };
         int loopFrames = o.TryGetValue("loop", out var lf) && int.TryParse(lf, out int lv) ? lv : ClipFit.DefaultLoopFrames;
         double root = o.TryGetValue("root-scale", out var rs) ? double.Parse(rs, System.Globalization.CultureInfo.InvariantCulture) : 1;
-        var fit = new FitOptions { Mode = mode, Loop = o.ContainsKey("loop"), LoopFrames = loopFrames, RootScale = root };
+        var fit = new FitOptions { Mode = mode, Loop = o.ContainsKey("loop"), LoopFrames = loopFrames, RootScale = root, KeepFeet = KeepFeet(o) };
         var graph = ClipGraph.Read(g);
         ImportResult r;
         try
         {
-            ImportResult Run(FitOptions f) => src is not null ? ClipReplace.FromClip(g.Skeleton, g.SharedTable, slot, src, f, graph.Verdict(slot.Id), true)
+            if (g.ReplaceProblem(slot, src) is { } why) throw new ImportRefusedException(why, src is null ? ImportRefusal.Slot : ImportRefusal.File);
+            var sk = g.SkeletonOf(slot)!;
+            ImportResult Run(FitOptions f) => src is not null ? ClipReplace.FromClip(sk, g.SharedTable, slot, src, f, graph.Verdict(slot.Id), true)
                 : ClipImport.Run(g, slot, glb!, graph, f);
             if (o.TryGetValue("start", out var st)) fit = fit with { CutStart = int.Parse(st, System.Globalization.CultureInfo.InvariantCulture) };
             else if (mode == FitMode.Cut && Run(fit with { Mode = FitMode.Hold, Loop = false }).Unfitted is { } u && ClipFit.SuggestCut(u, slot.LastTick) is int at)
@@ -84,7 +86,7 @@ static partial class Program
             return 1;
         }
         Console.Write(r.ReportText());
-        var (filled, dropped, kept) = ClipReplace.TrackMap(r, g.Skeleton);
+        var (filled, dropped, kept) = ClipReplace.TrackMap(r, g.SkeletonOf(slot) ?? g.Skeleton);
         Console.WriteLine($"track map: filled with the rest pose {filled.Count} ({string.Join(", ", filled)}); dropped {dropped.Count} ({string.Join(", ", dropped)}); kept {kept.Count}");
         foreach (var w in r.Report.Results.Where(x => x.Level != CheckLevel.Pass)) Console.Error.WriteLine(w.Line);
         if (PackageEntries.Unchanged(g, slot, r.Record) is { } same)
@@ -99,6 +101,100 @@ static partial class Program
         foreach (var f in files.Package.Files) Console.WriteLine($"wrote {f.Path}: {f.Length} B, SHA-256 {f.Sha256}");
         foreach (var p in files.Reports) Console.WriteLine($"wrote {p}");
         return r.Report.Verdict == CheckLevel.Fail ? 3 : 0;
+    }
+
+    /// <summary>--keep-feet on (the default) or off: keep planted feet in place during the tool's blends.</summary>
+    static bool KeepFeet(Dictionary<string, string> o) => o.GetValueOrDefault("keep-feet") switch
+    {
+        null or "on" => true, "off" => false,
+        var x => throw new ArgumentException($"--keep-feet {x}: on or off"),
+    };
+
+    /// <summary>sets: the sets the graph holds (and the probable sets by name), or with --clip the sets that clip is in, each with its kind,
+    /// its place, its blend and its clips.</summary>
+    static int Sets(string game, Dictionary<string, string> o)
+    {
+        using var g = GameInstall.Open(game, o.GetValueOrDefault("forge"));
+        var sets = ClipSets.ReadAll(g, ClipGraph.Read(g));
+        var names = g.AllClips.GroupBy(c => c.Id).ToDictionary(x => x.Key, x => x.First().Name);
+        string N(ulong id) => names.GetValueOrDefault(id, $"0x{id:X16}");
+        var shown = o.TryGetValue("clip", out var cn) ? sets.Of(FindClip(g, cn).Id) : sets.All;
+        Console.WriteLine($"states read {sets.StatesRead}, not read {sets.StatesUnread}; sets {sets.All.Count}: "
+            + string.Join(", ", sets.All.GroupBy(s => s.Kind).Select(x => $"{x.Key} {x.Count()}")));
+        foreach (var s in shown)
+            Console.WriteLine(FormattableString.Invariant($"{s.Words}, {s.Where}{(s.Kind == ClipSetKind.Blended ? "" : s.BlendSeconds is double b ? $", blend {b} s (the graph's)" : $", blend {ClipSet.DefaultBlendSeconds} s (not read)")}: {string.Join(", ", s.Clips.Select(N))}"));
+        return 0;
+    }
+
+    /// <summary>replace-set: Replace for a set, the set of --set's clip (its first set) or the clips of --clips (comma-separated), from one
+    /// source (--source or --glb), fitted as replace fits; each clip its own piece of the source unless --same-piece; lined up unless
+    /// --no-line-up. Every record file and report written as replace writes one. Exit codes as replace's.</summary>
+    static int ReplaceSet(string game, Dictionary<string, string> o)
+    {
+        using var g = GameInstall.Open(game, o.GetValueOrDefault("forge"));
+        var graph = ClipGraph.Read(g);
+        List<ClipEntry> slots;
+        bool blended = false;
+        int switchTicks = SetReplaceOptions.DefaultSwitchTicks;
+        if (o.TryGetValue("set", out var sn))
+        {
+            var sets = ClipSets.ReadAll(g, graph);
+            var set = sets.Main(FindClip(g, sn).Id) ?? throw new ArgumentException($"{sn} is in no set");
+            // a blended set needs matching poses: the same piece for every clip, as the Edit screen does
+            blended = set.Kind == ClipSetKind.Blended;
+            if (set.BlendSeconds is double bs) switchTicks = (int)Math.Round(bs * Core.Clips.ClipRecord.TicksPerSecond);
+            slots = set.Clips.Select(id => g.FindClip(id) ?? throw new ArgumentException($"0x{id:X16} isn't in the install")).ToList();
+            Console.WriteLine($"{set.Words} at {set.Where}: {string.Join(", ", slots.Select(c => c.Name))}");
+        }
+        else slots = Need(o, "clips").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Select(n => FindClip(g, n)).ToList();
+        var src = o.TryGetValue("source", out var srcName) ? SetSource.Of(FindClip(g, srcName)) : o.TryGetValue("glb", out var glb) ? SetSource.OfGlb(glb) : null;
+        if (src is null || (o.ContainsKey("source") && o.ContainsKey("glb"))) return Fail("error: replace-set takes one of --source <clip> and --glb <file>");
+        var mode = o.GetValueOrDefault("fit") switch
+        {
+            null or "cut" => FitMode.Cut, "speed" => FitMode.Speed, "hold" => FitMode.Hold,
+            var x => throw new ArgumentException($"--fit {x}: cut, speed or hold"),
+        };
+        int loopFrames = o.TryGetValue("loop", out var lf) && int.TryParse(lf, out int lv) ? lv : ClipFit.DefaultLoopFrames;
+        double root = o.TryGetValue("root-scale", out var rs) ? double.Parse(rs, System.Globalization.CultureInfo.InvariantCulture) : 1;
+        IReadOnlyList<int?>? starts = null;
+        if (o.TryGetValue("starts", out var sts))
+        {
+            // one entry a clip, in the set's order; "-" leaves that clip's start to the suggestion
+            starts = sts.Split(',', StringSplitOptions.TrimEntries).Select(x => x == "-" ? (int?)null : int.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToList();
+            if (starts.Count != slots.Count) return Fail($"error: --starts gives {starts.Count} starts for {slots.Count} clips");
+        }
+        if (o.TryGetValue("blend-ticks", out var bt)) switchTicks = int.Parse(bt, System.Globalization.CultureInfo.InvariantCulture);
+        var opts = new SetReplaceOptions
+        {
+            Fit = new FitOptions { Mode = mode, Loop = o.ContainsKey("loop"), LoopFrames = loopFrames, RootScale = root, KeepFeet = KeepFeet(o) },
+            DistinctPieces = !o.ContainsKey("same-piece") && !blended,
+            LineUp = !o.ContainsKey("no-line-up"),
+            Starts = starts,
+            SwitchTicks = switchTicks,
+            PoseSource = o.ContainsKey("pose-frame") ? src : null,
+            PoseFrame = o.TryGetValue("pose-frame", out var pf) ? int.Parse(pf, System.Globalization.CultureInfo.InvariantCulture) : 0,
+        };
+        SetReplaceResult sr;
+        try { sr = ClipSetReplace.Run(g, graph, slots, [src], opts); }
+        catch (ImportRefusedException ex) { Console.Error.WriteLine($"refused ({ex.Reason}): {ex.Message}"); return 1; }
+        foreach (var n in sr.Notes) Console.WriteLine(n);
+        var seams = ClipSetReplace.Seams(sr.Results);
+        for (int i = 0; i < seams.Count; i++)
+            Console.WriteLine(FormattableString.Invariant($"seam {slots[i].Name} -> {slots[(i + 1) % slots.Count].Name}: {seams[i]:F2} (pose distance, the end against the next start)"));
+        foreach (var r in sr.Results)
+            if (r.Report.Results.FirstOrDefault(x => x.Check == Feet.SlideCheck) is { } fs) Console.WriteLine($"feet {r.Slot.Name}: {fs.Line}");
+        foreach (var r in sr.Results)
+        {
+            Console.Write(r.ReportText());
+            if (PackageEntries.Unchanged(g, r.Slot, r.Record) is { } same) { Console.Error.WriteLine($"refused (unchanged): {r.Slot.Name}: {same}. Nothing was written."); return 1; }
+        }
+        ImportFiles files;
+        try { files = ImportOutput.Write(g, Need(o, "out"), sr.Results, o.ContainsKey("overwrite"), o.GetValueOrDefault("report")); }
+        catch (RecordFileException ex) when (ex.FilesWritten) { Console.Error.WriteLine("written, but: " + ex.Message); return 3; }
+        catch (RecordFileException ex) { Console.Error.WriteLine("refused: " + ex.Message); return 1; }
+        foreach (var f in files.Package.Files) Console.WriteLine($"wrote {f.Path}: {f.Length} B, SHA-256 {f.Sha256}");
+        foreach (var p in files.Reports) Console.WriteLine($"wrote {p}");
+        return sr.Results.Any(r => r.Report.Verdict == CheckLevel.Fail) ? 3 : 0;
     }
 
     /// <summary>compare: a record file read back by the core against the install's own clip of the same ID: per bone, how far its local

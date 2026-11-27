@@ -281,7 +281,8 @@ public sealed class ErrorTests
             Assert.DoesNotContain(Wpf.App.Windows.Cast<Window>(), w => w.IsVisible);
         });
         Assert.Equal(ErrorReport.DefaultLogPath, App.LogPathFor(ViewerArgs.Parse([]), parsed: true));
-        Assert.EndsWith(Path.Combine("GrbAnimTool", "errors.log"), ErrorReport.DefaultLogPath);
+        // in the run's own folder for the tool's files (ToolData), never the user's
+        Assert.Equal(Path.Combine(TestToolData.Folder, "errors.log"), ErrorReport.DefaultLogPath);
         // a command line that didn't parse (the tests' host's own, say): nowhere
         Assert.Null(App.LogPathFor(new ViewerArgs(), parsed: false));
         // an automated run: nowhere, whatever it does

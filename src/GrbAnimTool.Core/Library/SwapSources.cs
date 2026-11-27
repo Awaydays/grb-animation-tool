@@ -54,6 +54,24 @@ public sealed class SwapSources
     public IReadOnlyList<ClipEntry> For(ClipEntry target) =>
         _keyOf.TryGetValue(target.Key, out var k) ? _groups[k].Where(c => c.Key != target.Key && c.Id != target.Id).OrderBy(c => c.Index).ToList() : [];
 
+    /// <summary>The clips of <paramref name="candidates"/> (another datafile's, read only when they might match) that <paramref name="target"/>
+    /// can take an equal swap from: those of its length and track count first, then of its exact key.</summary>
+    public static IReadOnlyList<ClipEntry> Among(ClipEntry target, IEnumerable<ClipEntry> candidates, SharedCurveTable? table)
+    {
+        string? k;
+        try { k = Key(target.Record, table); }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException) { return []; }
+        if (k is null) return [];
+        var l = new List<ClipEntry>();
+        foreach (var c in candidates)
+        {
+            if (c.Key == target.Key || c.Id == target.Id || c.LastTick != target.LastTick || c.TrackCount != target.TrackCount) continue;
+            try { if (Key(c.Record, table) == k) l.Add(c); }
+            catch (Exception ex) when (ex is InvalidDataException or ArgumentException) { }
+        }
+        return l;
+    }
+
     /// <summary>How many clips have at least one swap source.</summary>
     public int Swappable => _groups.Values.Where(g => g.Count > 1).Sum(g => g.Count);
 }

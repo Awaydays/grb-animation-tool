@@ -82,8 +82,11 @@ public sealed class CensusTests(InstallFixture f)
     {
         var g = f.Install;
         Assert.NotNull(g.Vanilla);
-        Assert.Equal(9_938, g.Vanilla!.Count);
+        Assert.Equal(21_377, g.Vanilla!.Count);
         Assert.All(g.Clips, c => Assert.Equal(ClipStatus.Vanilla, c.Status));
+        // the other datafiles' clips too, every one of them read (their records read only now)
+        Assert.All(g.OtherClips, c => Assert.Equal(ClipStatus.Vanilla, c.Status));
+        Assert.Equal(11_439, g.OtherClips.Count);
         Assert.Equal(0, g.VanillaClipsMissing);
     }
 }

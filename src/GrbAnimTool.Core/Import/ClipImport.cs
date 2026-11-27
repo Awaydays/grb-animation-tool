@@ -139,7 +139,9 @@ public static class ClipImport
             bytes = File.ReadAllBytes(glbPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new ImportRefusedException($"{glbPath} can't be read: {ex.Message}", ImportRefusal.File, ex); }
-        return Run(g.Skeleton, g.SharedTable, slot, bytes, Path.GetFullPath(glbPath), graph?.Verdict(slot.Id), graph is not null, fit);
+        // the .glb on the clip's own skeleton: its bones are matched against it as against the body's
+        if (g.ReplaceProblem(slot, null) is { } why) throw new ImportRefusedException(why, ImportRefusal.Slot);
+        return Run(g.SkeletonOf(slot)!, g.SharedTable, slot, bytes, Path.GetFullPath(glbPath), graph?.Verdict(slot.Id), graph is not null, fit);
     }
 
     /// <summary>Imports a .glb's bytes; a file that can't be read as a glTF binary is refused (<see cref="ImportRefusal.File"/>).</summary>
@@ -490,6 +492,7 @@ public static class ClipImport
         report.AddRange(MotionChecks.Body(written, game));
         report.Add(MotionChecks.HandMoves(written, game, rec.Tracks.ToList()));
         report.Add(MotionChecks.Plants(written, game, Plants(rec, table)));
+        if (fitted is not null && Feet.Check(written, fitted.Blends) is { } slide) report.Add(slide);
         report.Add(Dropped(fromFile, expected, s, rec, table));
         report.Add(MotionField(verdict, graphRead));
         // a fitted motion (a replace, or an import of another length) on a clip whose steps the game lines blends up by

@@ -22,9 +22,12 @@ public partial class PackageView : UserControl
 {
     /// <summary>One item as the list shows it, with who plays the clip (<see cref="ClipUsers.Text"/>), shown under its name as
     /// <see cref="PlayedBy"/>.</summary>
-    public sealed record PackageRow(PackageItem Item, string Clip, int Index, string What, string Verdict, CheckLevel Level, string Warnings, string Users)
+    public sealed record PackageRow(PackageItem Item, string Clip, int Index, string What, string Verdict, CheckLevel Level, string Warnings, string Users, int BigDifferences = 0)
     {
         public string PlayedBy => "Played by: " + Users;
+
+        /// <summary>The look checks' mark: how many big differences from the game's own clip, or nothing.</summary>
+        public string Look => BigDifferences == 0 ? "" : $"{BigDifferences} big difference{(BigDifferences == 1 ? "" : "s")}";
     }
 
     GameInstall? _install;
@@ -44,8 +47,10 @@ public partial class PackageView : UserControl
         // "probably" stands for on hover), what was changed in it (a trim's exact ticks on hover), its checks' verdict and its warnings
         // (whole on hover)
         // the checks' verdict first, a coloured badge in sight beside the four every list has, the warnings on hover
-        ItemsPanel.AddBadgeColumn("Checks", 58, "The checks' verdict on the clip: PASS, WARN or FAIL; hover a badge for the warnings",
-            (c, d) => RowOf(c, d)?.Verdict ?? "", (c, d) => RowOf(c, d) is { } r ? $"{r.Verdict}. Warnings: {r.Warnings}" : "");
+        // the look checks' mark on it, a *: big differences from the game's own clip, which never stop a build
+        ItemsPanel.AddBadgeColumn("Checks", 58, "The game checks' verdict on the clip: PASS, WARN or FAIL, with * when the look checks found a big difference from the game's own clip; hover a badge for the warnings",
+            (c, d) => RowOf(c, d) is { } r ? r.Verdict + (r.BigDifferences > 0 ? "*" : "") : "",
+            (c, d) => RowOf(c, d) is { } r ? $"{r.Verdict}{(r.Look == "" ? "" : $" (look: {r.Look})")}. Warnings: {r.Warnings}" : "");
         // who plays each clip next (shown before the clip is replaced, as on every screen; a long one ends in an ellipsis, whole on hover),
         // then what was changed, as wide as its values up to a limit (FitChangeColumn: a swap from a clip name of up to about 25
         // characters reads whole; a longer value ends in an ellipsis, whole on hover), then the warnings, whole on hover. At the window's
@@ -60,7 +65,8 @@ public partial class PackageView : UserControl
         ItemsPanel.ModdedRow.Visibility = Visibility.Collapsed;
         ItemsPanel.Picked += _ => RemoveButton.IsEnabled = CanRemove;
         // the checks follow the selection, also when a search or a filter takes the selected row out (the list raises no Picked then)
-        ItemsPanel.List.SelectionChanged += (_, _) => ShowChecks();
+        // and so does Remove: a row the search hides is no row to remove
+        ItemsPanel.List.SelectionChanged += (_, _) => { ShowChecks(); RemoveButton.IsEnabled = CanRemove; };
         // the list's view getting wider or narrower (the window resized, the upright scroll bar shown or hidden): the Change column fitted again
         ItemsPanel.List.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
         {
@@ -83,8 +89,8 @@ public partial class PackageView : UserControl
         var row = ItemsPanel.SelectedClip is { } c ? RowOf(c, ItemsPanel.ColumnData) : null;
         ChecksPanel.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
         CheckList.ItemsSource = row is null ? null
-            : PackageEntries.Checks(row.Item).Select(x => new EditView.ReportRow(CheckResult.Word(x.Level), x.Level, x.Check, x.Message)).ToList();
-        ChecksTitle.Text = row is null ? "" : $"Checks of {row.Clip}: {row.Verdict}";
+            : PackageEntries.Checks(row.Item).Select(x => new EditView.ReportRow(x.Said, x.Shown, x.Check, x.Message)).ToList();
+        ChecksTitle.Text = row is null ? "" : $"Checks of {row.Clip}: {row.Verdict}" + (row.Look == "" ? "" : $", look: {row.Look}");
     }
 
     /// <summary>The save folder with no setting and no build yet: a folder of the tool's own in the Documents folder.</summary>
@@ -192,8 +198,9 @@ public partial class PackageView : UserControl
     internal static List<PackageRow> Rows(IReadOnlyList<PackageItem> items, ClipIndex? index, string? indexError) => items.Select(i =>
     {
         var w = PackageEntries.Warnings(i);
-        return new PackageRow(i, i.Slot.Name, i.Slot.Index, PackageEntries.What(i), CheckResult.Word(i.Verdict), i.Verdict,
-            w.Count == 0 ? "none" : string.Join("\n", w), ClipUsers.Of(index, i.Slot.Id, indexError).Text);
+        var v = PackageEntries.GameVerdict(i);
+        return new PackageRow(i, i.Slot.Name, i.Slot.Index, PackageEntries.What(i), CheckResult.Word(v), v,
+            w.Count == 0 ? "none" : string.Join("\n", w), ClipUsers.Of(index, i.Slot.Id, indexError).Text, PackageEntries.BigDifferences(i));
     }).ToList();
 
     /// <summary>Who plays each clip, as the screen shows it before Build: the list's rows, the notice above Build and, while Build waits
@@ -615,8 +622,8 @@ public partial class PackageView : UserControl
 
     /// <summary>The clips whose checks fail, named after the summary (none: nothing), so a FAIL is seen before Build whatever the list
     /// shows.</summary>
-    internal static string Failing(IReadOnlyList<PackageItem> items) => items.Where(i => i.Verdict == CheckLevel.Fail).Select(i => i.Slot.Name).ToList() is { Count: > 0 } f
-        ? $" {f.Count} clip{(f.Count == 1 ? " fails" : "s fail")} {(f.Count == 1 ? "its" : "their")} checks: {string.Join(", ", f)}."
+    internal static string Failing(IReadOnlyList<PackageItem> items) => items.Where(i => PackageEntries.GameVerdict(i) == CheckLevel.Fail).Select(i => i.Slot.Name).ToList() is { Count: > 0 } f
+        ? $" {f.Count} clip{(f.Count == 1 ? " fails" : "s fail")} {(f.Count == 1 ? "its" : "their")} game checks: {string.Join(", ", f)}."
         : "";
 
     /// <summary>The folder the last build wrote (full path), so the screen doesn't call it "an earlier build" right after.</summary>

@@ -24,7 +24,18 @@ namespace GrbAnimTool.App;
 public partial class EditView : UserControl
 {
     /// <summary>One line of the report as the list shows it.</summary>
-    public sealed record ReportRow(string Word, CheckLevel Level, string Check, string Text);
+    public sealed record ReportRow(string Word, CheckLevel Level, string Check, string Text)
+    {
+        /// <summary>The check's own "?" text, for a check that has one (the feet slide), else null.</summary>
+        public string? Help { get; init; }
+        public Visibility HelpShown => Help is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>A report's rows as the screens list them: game failures, game warnings, big differences, notes, then the rest, each in the
+    /// checks' own order (the sort is stable); each with its kind's word and its colour (<see cref="CheckResult.Shown"/>).</summary>
+    internal static List<ReportRow> ReportRows(CheckReport report) => report.Results.OrderByDescending(x => x.Rank).Select(x => new ReportRow(x.Said, x.Shown, x.Check,
+        x.Message + (x.Tick is int t ? $" (tick {t}{(x.Bone is null ? "" : $", {x.Bone}")})" : x.Bone is null ? "" : $" ({x.Bone})"))
+        { Help = x.Check == Feet.SlideCheck ? HelpTexts.FeetSlide : null }).ToList();
 
     GameInstall? _install;
     bool _automated;
@@ -68,6 +79,9 @@ public partial class EditView : UserControl
     {
         InitializeComponent();
         ClipPanel.Picked += OnClipSelected;
+        // Ctrl or Shift selects several clips: Replace takes them as its clips, as a set's
+        ClipPanel.MultiSelect = true;
+        ClipPanel.SelectionPicked += OnSelectionPicked;
         // the edits each clip allows, in a column of this screen's own after the four every list has, and the switch for the clips
         // that allow none (hidden until it is ticked)
         ClipPanel.AddColumn("Edits", 88, "The edits the clip allows: M mirror, R root-motion scale, S speed, T trim, W swap (a dot: not allowed). Filled in once they are worked out (the bar in the filters shows how far), at once when the cache holds them.",
@@ -153,6 +167,8 @@ public partial class EditView : UserControl
     public void SetInstall(GameInstall g, bool automated, LibraryView library, bool marks = true)
     {
         _automated = automated;
+        // a selection made in the Library again after another is taken again
+        if (!ReferenceEquals(_library, library)) library.ClipPanel.SelectionPicked += _ => _libraryTaken = null;
         _library = library;
         Sketch.Visibility = automated ? Visibility.Visible : Visibility.Collapsed;
         // a clip choice or an Apply in flight for the old install is dropped when it ends
@@ -167,6 +183,13 @@ public partial class EditView : UserControl
         _ctx = null;
         _original = null;
         _outcome = null;
+        _setOutcomes = null;
+        _preview = null;
+        _editSets = null;
+        _setsFailed = false;
+        _set = null;
+        _setRows = [];
+        SetClipList.ItemsSource = null;
         _options = [];
         _scene = new SkeletonScene(g.Skeleton);
         _ghost = new SkeletonScene(g.Skeleton, ghost: true);
@@ -183,7 +206,9 @@ public partial class EditView : UserControl
         MarksHad = null;
         RetryButton.Visibility = Visibility.Collapsed;
         ClipPanel.ColumnData = null;
-        ClipPanel.SetClips(g.Clips);
+        _chosen = null;
+        _libraryTaken = null;
+        ClipPanel.SetClips(g.AllClips);
         _replaceSource = null;
         _glbTicks = null;
         _replaceGlb = null;
@@ -191,6 +216,8 @@ public partial class EditView : UserControl
         ShowOptions();
         ShowOutcome();
         InstallWork.Open(g);
+        // the sets once the install's reads are open for it
+        _ = TakeSetsAsync(g);
         _marksWorkedOut = marks;
         if (marks) TakeChoices(g, InstallWork.Marks(g, library.IndexCacheFolder));
         else ApplyChoices();
@@ -504,13 +531,65 @@ public partial class EditView : UserControl
     /// <summary>When the screen is shown with no clip chosen, it takes the Library's.</summary>
     public void Shown()
     {
+        if (TakeLibrarySelection()) return;
         if (_clip is null && _library?.CurrentClip is { } c) Choose(c);
     }
 
     void OnUseLibraryClip(object sender, RoutedEventArgs e)
     {
+        if (TakeLibrarySelection(again: true)) return;
         if (_library?.CurrentClip is { } c) Choose(c);
         else ShowError("The Library screen shows no clip: select one there, or pick one in this screen's list.");
+    }
+
+    // the Library's selection of several last taken, so coming back to the screen doesn't undo what was chosen here since
+    IReadOnlyList<ClipEntry>? _libraryTaken;
+
+    /// <summary>Several clips selected in the Library: selected here too, as Ctrl-clicks in this screen's list would (Replace's clips),
+    /// the Library's clip shown. Taken once per selection, unless <paramref name="again"/>. Returns whether it took one.</summary>
+    bool TakeLibrarySelection(bool again = false)
+    {
+        if (_install is null || _library?.ClipPanel.SelectedClips is not { Count: >= 2 } many) return false;
+        if (!again && _libraryTaken is { } was && was.SequenceEqual(many)) return false;
+        _libraryTaken = many;
+        var shown = _library.CurrentClip is { } cur && many.Contains(cur) ? cur : many[^1];
+        LibrarySelectionTaken = TakeLibrarySelectionAsync(many, shown, ++_takeRun);
+        return true;
+    }
+
+    // the takings of the Library's selection: one taken again (Use the Library's clip) ends the one before
+    int _takeRun;
+
+    /// <summary>The last taking of the Library's selection (for tests).</summary>
+    internal Task LibrarySelectionTaken { get; private set; } = Task.CompletedTask;
+
+    async Task TakeLibrarySelectionAsync(IReadOnlyList<ClipEntry> many, ClipEntry shown, int run)
+    {
+        try
+        {
+            // the Library's clip shown first (a clip shown stays in the list whatever its filters), then the rows selected around it, it
+            // last, as the row picked; those hidden by this screen's search or filters brought back
+            await ChooseClipAsync(shown);
+            // another clip chosen here, or the Library's selection taken again, while the clip was read: that stands
+            if (_clip != shown || run != _takeRun) return;
+            // past the most a selection takes (Ctrl+A): nothing selected row by row, the screen says why at once
+            if (many.Select(c => c.Id).Distinct().Count() > MaxChosen) { OnSelectionPicked(many); return; }
+            // clips that allow no edit (Replace still takes them) shown, then the search and filters cleared, when they hide any
+            if (_choices is { } marks && ShowAllBox.IsChecked != true && many.Any(c => marks.Any(c) == false))
+            {
+                ShowAllBox.IsChecked = true;
+                ApplyChoices();
+            }
+            if (!many.All(ClipPanel.Rows.ToHashSet().Contains)) ClipPanel.ClearFilters();
+            ClipPanel.SelectMany([.. many.Where(c => c != shown), shown]);
+        }
+        // started from a tab shown or a click and not awaited: nothing may go unseen
+        catch (Exception ex)
+        {
+            App.LogError(ex, "while taking the Library's clips on the Edit screen");
+            SetBusy(null);
+            ShowError($"The Library's clips couldn't be taken ({ex.GetType().Name}): {ex.Message}");
+        }
     }
 
     /// <summary>Takes a clip from a click or a key: any error ends in the screen's error box, with the screen out of busy.</summary>
@@ -569,7 +648,8 @@ public partial class EditView : UserControl
     void OnSelectDelay()
     {
         _selectDelay.Stop();
-        if (ClipPanel.SelectedClip is { } c && c != _clip) Choose(c);
+        // the row the list stands on (the last one added to a selection of several), not merely the first selected
+        if ((ClipPanel.Shown is { } s && ClipPanel.SelectedClips.Contains(s) ? s : ClipPanel.SelectedClip) is { } c && c != _clip) Choose(c);
         else UpdateButtons();
     }
 
@@ -577,7 +657,7 @@ public partial class EditView : UserControl
     public async Task<string?> ChooseClipAsync(string clip)
     {
         if (_install is null) return "Open your game folder on the Library screen first.";
-        var c = ClipQuery.Find(_install.Clips, clip);
+        var c = ClipQuery.Find(_install.AllClips, clip);
         if (c is null) return $"No clip named or with the ID '{clip}' in this game folder.";
         await ChooseClipAsync(c);
         return _original is null ? ErrorText.Text : null;
@@ -602,6 +682,8 @@ public partial class EditView : UserControl
         TrackMapText.Text = "";
         _loopFrom = null;
         _outcome = null;
+        _setOutcomes = null;
+        SetResultText.Text = "";
         _options = [];
         _sources = [];
         LastError = null;
@@ -638,15 +720,20 @@ public partial class EditView : UserControl
                 cancel.ThrowIfCancellationRequested();
                 var swaps = await InstallWork.Swaps(g);
                 cancel.ThrowIfCancellationRequested();
-                var mirror = await InstallWork.Mirror(g);
+                // the clip on its own skeleton: the body's mirror only for a clip on the body; a clip whose skeleton isn't known isn't edited
+                bool onBody = c.OnSkeleton.Kind == Core.Skeletons.ClipSkeletonKind.Body;
+                var mirror = onBody ? await InstallWork.Mirror(g) : null;
                 cancel.ThrowIfCancellationRequested();
-                var ctx = new EditContext(g.Skeleton, g.SharedTable, graph?.Verdict(c.Id));
-                IReadOnlyList<ClipEntry> sources = swaps?.For(c) ?? [];
+                var sk = g.SkeletonOf(c);
+                var ctx = new EditContext(sk ?? g.Skeleton, g.SharedTable, graph?.Verdict(c.Id));
+                // the swap sources of the animation datafile's, and any other datafile's clip of the same length, tracks and kinds
+                IReadOnlyList<ClipEntry> sources = sk is null ? [] : [.. (swaps?.For(c) ?? []), .. SwapSources.Among(c, g.OtherClips, g.SharedTable)];
                 cancel.ThrowIfCancellationRequested();
                 Motion? motion = null;
-                string? why = null;
-                try { motion = Motion.FromClip(g.Skeleton, c.Record ?? throw new InvalidDataException(c.ParseError ?? "the record can't be read"), g.SharedTable); }
-                catch (InvalidDataException ex) { why = ex.Message; }
+                string? why = sk is null ? g.ReplaceProblem(c, null) : null;
+                if (sk is not null)
+                    try { motion = Motion.FromClip(sk, c.Record ?? throw new InvalidDataException(c.ParseError ?? "the record can't be read"), g.SharedTable); }
+                    catch (InvalidDataException ex) { why = ex.Message; }
                 // the clip chosen is tried at every step of each slider and every cut of the trim's grid, on all the processor's cores
                 var choices = EditJobs.Choices(c, ctx, mirror, sources.Count, cancel, parallelism: null, full: true);
                 // the timeline's marks too: nothing of the clip is worked out on the window's thread
@@ -673,6 +760,13 @@ public partial class EditView : UserControl
         _mirror = r.mirror;
         _sources = r.sources;
         _original = r.motion;
+        // a clip of another skeleton (an animal, a drone) is drawn on its own
+        if (r.motion?.Skeleton is { } shownOn && !ReferenceEquals(_scene?.Skeleton, shownOn))
+        {
+            _scene = new SkeletonScene(shownOn);
+            _ghost = new SkeletonScene(shownOn, ghost: true);
+            _model = new Transform[shownOn.Bones.Count];
+        }
         _options = [.. r.choices.Options];
         // an edit the tool failed on for this clip ("can't tell" under it): its error logged, the clip and the edit named
         foreach (var o in _options.Where(o => o.Error is not null)) App.LogCaught(o.Error!, $"while checking whether {c.Name} takes {EditJobs.Name(o.Kind)}");
@@ -913,17 +1007,17 @@ public partial class EditView : UserControl
         var kind = Chosen;
         // a trim with both handles at the clip's ends would change nothing; a cut being tried, or refused, isn't made; a speed only at a
         // factor that works
-        ApplyButton.IsEnabled = !_busy && !_selectDelay.IsEnabled && _clip is not null && (ReplaceChosen ? ReplaceReady
+        ApplyButton.IsEnabled = !_busy && !_selectDelay.IsEnabled && _clip is not null && (ReplaceChosen ? (SetTicked ? SetChosen && SetReady : ReplaceReady)
             : _ctx is not null && kind is not null && (kind != EditKind.Swap || SourceBox.SelectedItem is ClipEntry)
             && (kind != EditKind.Trim || _trim.Cuts && !_trimPending && _trimBlock is null)
             && (kind != EditKind.Speed || SpeedRefused(SpeedSlider.Value) is null)
             && (kind != EditKind.Scale || FactorRefused(_scales, ScaleSlider.Value) is null));
         ApplyKeepButton.IsEnabled = ApplyButton.IsEnabled;
         // a result made but not in the package is said, until it is added or another is made
-        NotKeptText.Visibility = !_busy && _outcome is { } made && Unchanged is null && !InPackage(made) ? Visibility.Visible : Visibility.Collapsed;
+        NotKeptText.Visibility = !_busy && _outcome is { } made && NotKeepable is null && !InPackage(made) ? Visibility.Visible : Visibility.Collapsed;
         _keepTip ??= KeepButton.ToolTip;
         // a result that changes nothing is greyed with its reason: the game's own record is the game's file, never packaged
-        string? same = _busy ? null : Unchanged;
+        string? same = _busy ? null : NotKeepable;
         KeepButton.IsEnabled = !_busy && _outcome is not null && same is null;
         KeepButton.ToolTip = same is null ? _keepTip : $"Not for the package: {same}.";
         // the edit's own reason already says it changed nothing; the game's own clip is said to be unchanged by the edit only when the
@@ -933,6 +1027,11 @@ public partial class EditView : UserControl
                 ? " This edit changed nothing in the clip's record." : "");
         KeepReasonText.Visibility = same is null ? Visibility.Collapsed : Visibility.Visible;
     }
+
+    /// <summary>Why the result can't be added to the package, or null: no change (<see cref="Unchanged"/>), or a game check failed
+    /// (<see cref="PackageEntries.NotForPackage"/>). A look check never stops it.</summary>
+    string? NotKeepable => _setOutcomes is not null && _install is { } g ? SetNotKeepable(g)
+        : Unchanged ?? (_outcome is { } o ? PackageEntries.NotForPackage(o.Report.Verdict) : null);
 
     /// <summary>The Add button's own tooltip, shown while it can be used.</summary>
     object? _keepTip;
@@ -981,7 +1080,9 @@ public partial class EditView : UserControl
     /// <summary>Runs the chosen edit in the background and shows its result. Returns the refusal or failure, or null.</summary>
     public async Task<string?> ApplyAsync()
     {
-        if (ReplaceChosen) return await ReplaceAsync();
+        if (ReplaceChosen) return SetTicked ? await ReplaceSetAsync() : await ReplaceAsync();
+        _setOutcomes = null;
+        SetResultText.Text = "";
         _loopFrom = null;
         TrackMapText.Text = "";
         if (_clip is null || _ctx is null || Request() is not { } req) return "Choose a clip and an edit first.";
@@ -1038,7 +1139,8 @@ public partial class EditView : UserControl
     public string? Keep()
     {
         if (_outcome is null) return "Nothing applied to add.";
-        if (Unchanged is { } same) return $"Not added: {_outcome.Clip.Name}: {same}.";
+        if (_setOutcomes is not null) return KeepSet();
+        if (NotKeepable is { } same) return $"Not added: {_outcome.Clip.Name}: {same}.";
         bool replaced = PackageList.Current.Keep(PackageEntries.ForEdit(_outcome));
         StatusText.Text = $"Added {_outcome.Clip.Name} ({_outcome.Change.Words}) to the package{(replaced ? ", in place of the one added before for this clip" : "")}. "
             + $"The package holds {PackageList.Current.Count}.";
@@ -1048,6 +1150,8 @@ public partial class EditView : UserControl
     /// <summary>The viewport, the timeline and the checks panel for the result (or, before one, the original alone).</summary>
     void ShowOutcome()
     {
+        // a set's preview ends with any change to what is shown
+        _preview = null;
         var o = _outcome;
         _sceneHolder.Children.Clear();
         _ghostHolder.Children.Clear();
@@ -1062,11 +1166,10 @@ public partial class EditView : UserControl
         {
             // the failures first, then the warnings, then the passes, each in the checks' own order (the sort is stable), so what needs
             // a look is in sight without a scroll
-            ReportList.ItemsSource = o.Report.Results.OrderByDescending(x => x.Level).Select(x => new ReportRow(CheckResult.Word(x.Level), x.Level, x.Check,
-                x.Message + (x.Tick is int t ? $" (tick {t}{(x.Bone is null ? "" : $", {x.Bone}")})" : x.Bone is null ? "" : $" ({x.Bone})"))).ToList();
+            ReportList.ItemsSource = ReportRows(o.Report);
             NotesList.ItemsSource = o.Result.Notes;
             var v = o.Report.Verdict;
-            VerdictText.Text = $"{CheckResult.Word(v)}: {o.Report.Count(CheckLevel.Pass)} pass, {o.Report.Count(CheckLevel.Warn)} warn, {o.Report.Count(CheckLevel.Fail)} fail. "
+            VerdictText.Text = $"{o.Report.Headline} "
                 + FormattableString.Invariant($"{o.Clip.LastTick} ticks before, {o.Result.Record.LastTick} after; {o.Result.Warnings.Count} warning(s) from the animation graph.");
             VerdictText.SetResourceReference(TextBlock.ForegroundProperty, Theme.TextKeyOf(v));
         }
@@ -1178,13 +1281,15 @@ public partial class EditView : UserControl
         var o = _outcome;
         int t = _clock.Tick;
         bool mover = MoverBox.IsChecked == true;
-        var m = o?.Edited ?? _original!;
+        var m = _preview?.Chain ?? o?.Edited ?? _original!;
         t = Math.Clamp(t, 0, m.LastTick);
         Draw(_scene!, m, t, mover);
-        _scene!.MarkFeet(ClipMarks.Planted(_plants, 0, t), ClipMarks.Planted(_plants, 1, t));
+        _scene!.MarkFeet(_preview is null && ClipMarks.Planted(_plants, 0, t), _preview is null && ClipMarks.Planted(_plants, 1, t));
         Follow();
         string text;
-        if (o is not null)
+        if (_preview is not null)
+            text = $"{PreviewLine(t)}\n{_clock.Time:F3} s  tick {t} / {m.LastTick}  mover {(mover ? "on" : "off")}";
+        else if (o is not null)
         {
             int ot = _reference.TickAt(t);
             OriginalTickShown = ot;

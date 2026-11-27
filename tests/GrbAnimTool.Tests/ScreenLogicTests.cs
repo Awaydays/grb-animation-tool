@@ -298,7 +298,9 @@ public sealed class ScreenLogicTests : IDisposable
         Assert.Equal(PackageItemKind.Import, PackageEntries.Kind(item));
         // the file's name only, never its folder
         Assert.Equal("Imported: walk_new.glb", PackageEntries.What(item));
-        Assert.Equal(new[] { "WARN speed: a bit fast (worst at tick 12, Spine)", "FAIL pops: a jump" }, PackageEntries.Warnings(item));
+        // speed and pops are look checks: a note and a big difference, never a WARN or FAIL, and the verdict the game checks' alone
+        Assert.Equal(new[] { "Note speed: a bit fast (worst at tick 12, Spine)", "Big difference pops: a jump" }, PackageEntries.Warnings(item));
+        Assert.Equal(CheckLevel.Pass, report.Verdict);
     }
 
     // ---------------------------------------------------------------------------------------------------------------- the package

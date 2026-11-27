@@ -280,7 +280,7 @@ public sealed class ResponsiveTests
                             w.Tabs.SelectedIndex = 1;
                             Lay(root, Sizes[0]);
                             Assert.True(edit.MarksPending, what);
-                            Assert.Equal(g.Clips.Count, edit.ClipPanel.Rows.Count);
+                            Assert.Equal(g.AllClips.Count, edit.ClipPanel.Rows.Count);
                             Assert.False(edit.ShowAllBox.IsEnabled, what + ": the switch doesn't wait");
                             Assert.Contains("Waiting for which edits each clip allows", edit.ShowAllBox.ToolTip as string);
                             Assert.Equal(Visibility.Visible, edit.MarksBar.Visibility);
@@ -328,7 +328,8 @@ public sealed class ResponsiveTests
                             Assert.Contains(zero, edit.ClipPanel.Rows);
                             Assert.Same(zero, edit.ClipPanel.SelectedClip);
                         }
-                        Assert.Equal(g.Clips.Count(c => c.Index % 3 != 0) + (opening == 0 ? 1 : 0), edit.ClipPanel.Rows.Count);
+                        // the other datafiles' clips stay listed: their edits aren't worked out (not told)
+                        Assert.Equal(g.Clips.Count(c => c.Index % 3 != 0) + g.OtherClips.Count + (opening == 0 ? 1 : 0), edit.ClipPanel.Rows.Count);
                         Assert.Contains("that allow no edit left out", edit.ClipPanel.CountText.Text);
                         Assert.True(ScreenTimingTests.Containers(edit.ClipPanel.List) < MostRows, what);
                         Assert.Contains(opening == 0 ? "worked out in" : "read from the cache in", edit.MarksHad);
@@ -341,7 +342,7 @@ public sealed class ResponsiveTests
                             var zero2 = g.Clips.First(c => c.Index % 3 == 0 && c.Record is not null && c != zero);
                             edit.ShowAllBox.IsChecked = true;
                             edit.ShowAllBox.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-                            Assert.Equal(g.Clips.Count, edit.ClipPanel.Rows.Count);
+                            Assert.Equal(g.AllClips.Count, edit.ClipPanel.Rows.Count);
                             await edit.ChooseClipAsync(zero2);
                             edit.ShowAllBox.IsChecked = false;
                             edit.ShowAllBox.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
@@ -383,7 +384,7 @@ public sealed class ResponsiveTests
                             Assert.True(edit.MarksPending);
                             Assert.Equal("working out the edits, 30%", edit.MarksText.Text);
                             Assert.False(edit.ShowAllBox.IsEnabled);
-                            Assert.Equal(g.Clips.Count, edit.ClipPanel.Rows.Count);
+                            Assert.Equal(g.AllClips.Count, edit.ClipPanel.Rows.Count);
                             edit.EndWaitingForShot();
                             Assert.False(edit.MarksPending);
                             Assert.True(edit.ShowAllBox.IsEnabled);
@@ -392,7 +393,7 @@ public sealed class ResponsiveTests
                             edit.SetMarks(EditMarks.From(g.Clips.ToDictionary(c => c.Id, _ => EditMarks.AllEdits)));
                             edit.EndWaitingForShot();
                             Assert.False(edit.MarksPending);
-                            Assert.Equal(g.Clips.Count, edit.ClipPanel.Rows.Count);
+                            Assert.Equal(g.AllClips.Count, edit.ClipPanel.Rows.Count);
                             // the Import screen's picture waiting holds the clip index back and gives it back
                             var import = w.ImportPage;
                             Assert.Null(import.ShowWaitingForShot(new ShotSpec("y.png", null, 0.6f, null, ViewerArgs.ImportWaiting), shotArgs));

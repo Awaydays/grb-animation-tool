@@ -97,14 +97,19 @@ public sealed class PackageScreenTests
                 var next = new PackageView();
                 next.UseSettings(settings);
                 Assert.Equal(last, next.FolderBox.Text);
-                // a run without a settings file remembers nothing: the file keeps the folder set before
+                // a run without a settings file remembers nothing: the file keeps the folder set before, and the usual settings file
+                // (the run's own folder's, ToolData) is as it was, so a fall back to it would fail here
                 next.SetPackageFolder(set);
                 Assert.Equal(set, ViewerSettings.Load(settings).PackageFolder);
+                string usual = ViewerSettings.DefaultPath;
+                Assert.StartsWith(TestToolData.Folder, usual);
+                byte[]? before = File.Exists(usual) ? File.ReadAllBytes(usual) : null;
                 var automated = new PackageView();
                 automated.UseSettings(null);
                 automated.SetPackageFolder(chosen);
                 Assert.Equal(chosen, automated.FolderBox.Text);
                 Assert.Equal(set, ViewerSettings.Load(settings).PackageFolder);
+                Assert.Equal(before, File.Exists(usual) ? File.ReadAllBytes(usual) : null);
             });
         }
         finally { Directory.Delete(dir, true); }
@@ -206,6 +211,14 @@ public sealed class PackageScreenTests
                 string written = Assert.Single(Directory.GetFiles(outDir, $"*_-_{idle.Name}.Animation"));
                 Assert.Equal(Core.Records.RecordFile.Content(hold.Record), File.ReadAllBytes(written));
                 Assert.NotEqual(Core.Records.RecordFile.Content(expected.Record), File.ReadAllBytes(written));
+
+                // a file chosen again: while it is read, the result shown is the file before's, so Keep and Export wait
+                Assert.True(import.KeepButton.IsEnabled);
+                var reading = import.ChooseGlbAsync(glb, pickNamed: false);
+                Assert.False(import.KeepButton.IsEnabled);
+                Assert.False(import.ExportButton.IsEnabled);
+                await reading;
+                Assert.True(import.KeepButton.IsEnabled, import.LastError);
             });
         }
         finally

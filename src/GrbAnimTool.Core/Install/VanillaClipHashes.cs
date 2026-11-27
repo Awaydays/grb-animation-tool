@@ -28,9 +28,10 @@ public sealed class VanillaClipHashes
     public const string ResourceName = "GrbAnimTool.Core.vanilla-clips.txt";
     const string Header = "# GRB Anim Tool: the game's own clip records, by clip ID (hex), with the SHA-256 of each whole record";
 
-    readonly Dictionary<ulong, byte[]> _hashes;
+    // one clip ID may stand in several datafiles; their records are nearly always the same bytes, but where they aren't each is the game's
+    readonly Dictionary<ulong, List<byte[]>> _hashes;
 
-    VanillaClipHashes(Dictionary<ulong, byte[]> h) => _hashes = h;
+    VanillaClipHashes(Dictionary<ulong, List<byte[]>> h) => _hashes = h;
 
     public int Count => _hashes.Count;
     public IEnumerable<ulong> Ids => _hashes.Keys;
@@ -45,7 +46,7 @@ public sealed class VanillaClipHashes
     public static VanillaClipHashes Read(Stream s)
     {
         using var r = new StreamReader(s, Encoding.ASCII);
-        var d = new Dictionary<ulong, byte[]>();
+        var d = new Dictionary<ulong, List<byte[]>>();
         int n = 0;
         while (r.ReadLine() is { } line)
         {
@@ -56,15 +57,18 @@ public sealed class VanillaClipHashes
             byte[] h;
             try { h = Convert.FromHexString(line.AsSpan(17)); }
             catch (FormatException) { throw new InvalidDataException($"clip hash table, line {n}: not a SHA-256"); }
-            if (!d.TryAdd(id, h)) throw new InvalidDataException($"clip hash table, line {n}: ID {id:X16} twice");
+            if (!d.TryGetValue(id, out var l)) d[id] = l = [];
+            if (l.Any(x => x.AsSpan().SequenceEqual(h))) throw new InvalidDataException($"clip hash table, line {n}: ID {id:X16} with that SHA-256 twice");
+            l.Add(h);
         }
         return new VanillaClipHashes(d);
     }
 
+    /// <summary>Writes the table, sorted by ID: one line an ID and record hash, an ID with records of several hashes (in several
+    /// datafiles) on a line for each; the same hash twice is one line.</summary>
     public static void Write(Stream s, IEnumerable<(ulong Id, byte[] Sha256)> entries)
     {
-        var list = entries.OrderBy(x => x.Id).ToList();
-        if (list.Select(x => x.Id).Distinct().Count() != list.Count) throw new ArgumentException("duplicate clip IDs");
+        var list = entries.DistinctBy(x => (x.Id, Convert.ToHexString(x.Sha256))).OrderBy(x => x.Id).ThenBy(x => Convert.ToHexString(x.Sha256)).ToList();
         var w = new StreamWriter(s, new UTF8Encoding(false)) { NewLine = "\n" };
         w.WriteLine(Header);
         foreach (var (id, sha) in list)
@@ -79,9 +83,20 @@ public sealed class VanillaClipHashes
 
     public ClipStatus StatusOf(ulong id, ReadOnlySpan<byte> record)
     {
-        if (!_hashes.TryGetValue(id, out var h)) return ClipStatus.Added;
+        if (!_hashes.TryGetValue(id, out var hs)) return ClipStatus.Added;
         Span<byte> mine = stackalloc byte[32];
         SHA256.HashData(record, mine);
-        return mine.SequenceEqual(h) ? ClipStatus.Vanilla : ClipStatus.Replaced;
+        foreach (var h in hs) if (mine.SequenceEqual(h)) return ClipStatus.Vanilla;
+        return ClipStatus.Replaced;
+    }
+
+    /// <summary>As <see cref="StatusOf"/>, from the record's SHA-256 in hex (as the datafile cache keeps it).</summary>
+    public ClipStatus StatusOfSha256(ulong id, string sha256Hex)
+    {
+        if (!_hashes.TryGetValue(id, out var hs)) return ClipStatus.Added;
+        byte[] mine;
+        try { mine = Convert.FromHexString(sha256Hex); }
+        catch (FormatException) { return ClipStatus.Replaced; }
+        return hs.Any(h => h.AsSpan().SequenceEqual(mine)) ? ClipStatus.Vanilla : ClipStatus.Replaced;
     }
 }

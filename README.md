@@ -35,11 +35,34 @@ Version 1.1.0. The release download is a self-contained Windows program (no .NET
    - Trim or Speed refused: this clip has timing data the tool can't safely change. Replace and Import still work.
 5. **Package:** Build makes a folder with your changed files (named 1_-_...) and a folder with the files they replace. Place the files
    like any other animation mod. To undo, delete the 1_-_ files and put the originals back.
+   Clips from other datafiles go in that datafile's own folder; the package shows where.
 
 **Modded files.** When the animation datafile is unpacked beside your game's `DataPC_patch_01.forge` (in its `Extracted` folder), the
 tool also lists the record files there. A file that replaces the game's own version (it's named 1_-_...) is marked Modded. Both are
 listed and both can be edited. **Modded only** shows every file that isn't the game's own: Modded (a separate 1_-_ file) and Replaced
 (changed inside the game's files).
+
+**Sets.** Some clips are a set: clips the game switches between in one place, like the idles of one stance. The Library's **Set**
+column and **Show the set** show them. Replacing one clip of a set looks sudden next to the others, so on the Edit screen tick
+**Replace the set** to put the source on every clip, each fitted to its own length, and keep **Line up the set** on so the switches
+between them don't jump; **Preview the set** plays them one after another. A set marked probable was grouped by name, not read from
+the game's data: check it in game. Each clip's piece of a long source starts where its feet match, and the pieces overlap as little as
+their lengths allow; each start can be changed, and **Suggest** works them out again. During the tool's blends a planted foot stays
+where it is (the look check **feet slide** says how far one still moves). Select several clips (up to 100) with Ctrl or Shift, in the
+Library or on the Edit screen, to replace them as a set.
+
+**Datafiles.** The game keeps its animations in several files. Most player animations are in one of them (`MIS_Y2E4_Katya_Maksimov`);
+civilians and other characters have their own. The tool lists the clips of every one of them, with a **Datafile** column and filter
+(type part of a datafile's name to find it). Each clip shows on its own skeleton (the human body for every character, an animal's or a
+drone's own), and Replace, Import and Swap work between clips of one skeleton: Replace lists only the sources the clip can take
+(**Show every clip** lists the others greyed, with why). A package puts another datafile's clip in that datafile's own folder (`index_-_name.data`), and in
+every other datafile that holds the same clip, with its original beside it. Where the game's own file of the clip is the datafile's
+record 0 or 1 (a small datafile), a 1_-_ file wouldn't be loaded first, so the package's file takes the game's own file's name: put it in
+that file's place.
+
+**Checks.** Game checks say whether the game can play it; a FAIL there stops it being added. Look checks say how different it looks
+from the game's own animation (floating, big joint angles, hands or feet in other places). The game still plays it; check whether
+that's what you want.
 
 Every screen's **?** shows its own lines of the above; **Help > Quick start** shows the Import and Replace ones.
 
@@ -56,7 +79,8 @@ files are in this repository's `clip-logger` folder). The tool doesn't need it, 
 - It never ships or copies any of the game's files, or the game's Oodle library: it loads that library from your game folder only
   when its SHA-256 is one the tool knows. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-The tool keeps its own settings, caches, error log and package list in `%APPDATA%\GrbAnimTool\`.
+The tool keeps its own settings, caches, error log and package list in `%APPDATA%\GrbAnimTool\`. For tests only, the environment
+variable `GRBANIM_APPDATA` names another folder for them; every test run sets it, so no test reads or writes yours.
 
 ## For developers
 
@@ -70,7 +94,9 @@ Building needs Windows and the .NET 10 SDK; a build you make yourself runs on th
 ### Layout
 
 - `src/GrbAnimTool.Core`: the core library. It reads the install read-only: the forges, the animation datafile and every clip in it,
-  the shared curve table, the body skeleton with the fake-gun add-on, and poses a clip on the skeleton at any time.
+  every other datafile's clips (listed through a cache in the tool's folder, each record read when needed), the shared curve table,
+  the body skeleton with the fake-gun add-on (and another skeleton record for a clip of its own), and poses a clip on its skeleton at
+  any time.
   Its `Graph` folder reads the game's animation graph documents (LZO1X streams in the same datafile) for which nodes name each clip,
   whether one holds the clip's length (no trim or speed then) and whether a motion field uses it (no mirror or root-motion scale then).
   Only the places where a clip's ID stands (and a motion field's segments, which name its clip list entry by index) count as holding the

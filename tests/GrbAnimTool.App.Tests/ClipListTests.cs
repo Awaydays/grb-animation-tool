@@ -262,8 +262,8 @@ public class ClipListTests(Xunit.Abstractions.ITestOutputHelper output)
             Index = 1, Id = (ulong)name.GetHashCode(), Name = name, Bytes = ReadOnlyMemory<byte>.Empty,
         }, [], ClipChange.Imported("x.glb"), verdict, "", DateTime.Now);
         Assert.Equal("", PackageView.Failing([Kept("a", Core.Checks.CheckLevel.Pass), Kept("b", Core.Checks.CheckLevel.Warn)]));
-        Assert.Equal(" 1 clip fails its checks: b.", PackageView.Failing([Kept("a", Core.Checks.CheckLevel.Pass), Kept("b", Core.Checks.CheckLevel.Fail)]));
-        Assert.Equal(" 2 clips fail their checks: a, b.", PackageView.Failing([Kept("a", Core.Checks.CheckLevel.Fail), Kept("b", Core.Checks.CheckLevel.Fail)]));
+        Assert.Equal(" 1 clip fails its game checks: b.", PackageView.Failing([Kept("a", Core.Checks.CheckLevel.Pass), Kept("b", Core.Checks.CheckLevel.Fail)]));
+        Assert.Equal(" 2 clips fail their game checks: a, b.", PackageView.Failing([Kept("a", Core.Checks.CheckLevel.Fail), Kept("b", Core.Checks.CheckLevel.Fail)]));
     }
 
     [Fact]

@@ -38,7 +38,38 @@ public static class HelpTexts
 
     public const string Package =
         "Build makes a folder with your changed files (named 1_-_...) and a folder with the files they replace. Place the files like any other "
-        + "animation mod. To undo, delete the 1_-_ files and put the originals back.";
+        + "animation mod. To undo, delete the 1_-_ files and put the originals back.\n"
+        + "Clips from other datafiles go in that datafile's own folder; the package shows where.";
+
+    public const string Checks =
+        "Game checks: whether the game can play it. A FAIL here stops it being added.\n"
+        + "Look checks: how different it looks from the game's own animation (floating, big joint angles, hands or feet in other places). "
+        + "The game still plays it; check whether that's what you want.";
+
+    public const string Set =
+        "Clips the game switches between in one place, like the idles of one stance. Replace the whole set so they match.";
+
+    public const string LineUpSet =
+        "Blends the start and end of every clip toward the same pose, so the game's switches between them don't jump.";
+
+    public const string ProbableSet =
+        "Grouped by name; the tool couldn't read this set from the game's data. Check it in game.";
+
+    public const string FeetSlide =
+        "How far a planted foot moves during the tool's blends and at the switches between clips. A sliding foot shows in game.";
+
+    public const string PieceStart =
+        "Where this clip's piece starts in the source. Suggest spreads the pieces so they overlap as little as possible and the feet line up.";
+
+    public const string SetFilter =
+        "Clips the game switches between in one place. Blended: the game mixes them by a value such as aim angle.";
+
+    public const string DatafileFilter =
+        "The game keeps its animations in several files. Most player animations are in one of them; civilians and other characters have their own.";
+
+    /// <summary>The warning under "One source for all" on a blended set, for the value the game blends it by.</summary>
+    public static string OneSourceOnBlended(string parameter) =>
+        $"Every clip gets the same pose, so the game's blend between them ({parameter}) does nothing.";
 
     /// <summary>The Help menu's Quick start: the Import text, then the Replace text.</summary>
     public const string QuickStart = Import + "\n\n" + Replace;

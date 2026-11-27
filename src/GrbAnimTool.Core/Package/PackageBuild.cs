@@ -190,7 +190,12 @@ public static class PackageBuild
     /// folder with the same file names, and the marker, and the first problem found (no clip, no name, no save folder, a save folder holding
     /// a character Windows refuses in a folder name, a save folder in or under a protected folder or in or under a folder carrying this
     /// tool's marker, a record file's name the rules refuse, two clips of one file name).</summary>
-    public static PackagePlan Plan(IReadOnlyList<(int Index, string Name, ulong Id)> clips, string packageName, string saveFolder, IEnumerable<string> protectedFolders)
+    public static PackagePlan Plan(IReadOnlyList<(int Index, string Name, ulong Id)> clips, string packageName, string saveFolder, IEnumerable<string> protectedFolders) =>
+        Plan(clips, packageName, saveFolder, protectedFolders, others: 0);
+
+    /// <summary>As the plan above, with <paramref name="others"/> clips of other datafiles in the package beside <paramref name="clips"/>
+    /// (their files are planned apart, <see cref="OtherFiles"/>): a package of those alone holds a clip.</summary>
+    static PackagePlan Plan(IReadOnlyList<(int Index, string Name, ulong Id)> clips, string packageName, string saveFolder, IEnumerable<string> protectedFolders, int others)
     {
         string folder = FolderNameFor(packageName ?? "");
         string save = (saveFolder ?? "").Trim();
@@ -212,7 +217,7 @@ public static class PackageBuild
                 "the game's own file of each clip this package replaces, and your current mod of it as 1_-_...: delete the package's files and put these back to undo it"));
         files.AddRange(originals);
         files.Add(new PackageFile(MarkerName, "this tool's marker file (the package's name and the build time): only a folder carrying it is replaced by a later build"));
-        if (clips.Count == 0) problem = "The package holds no clip yet: add an import or an edit first.";
+        if (clips.Count == 0 && others == 0) problem = "The package holds no clip yet: add an import or an edit first.";
         else if (folder.Length == 0) problem = "Give the package a name: it names the package's folder.";
         else if (save.Length == 0) problem = "Choose a save folder of your own.";
         else
@@ -254,9 +259,10 @@ public static class PackageBuild
     /// anywhere is no problem: the package is built without that original, and the screen names it (<see cref="MissingNote"/>).</summary>
     public static PackagePlan Plan(GameInstall g, IReadOnlyList<PackageItem> items, string packageName, string saveFolder, string? backupForge = null)
     {
-        var originals = Originals(g, items, readForges: false, backupForge);
+        var (katya, others) = Split(g, items);
+        var originals = Originals(g, katya, readForges: false, backupForge);
         // the package's own files (named by the rows kept) and the marker; the originals are named below, each by its own record
-        var plan = Plan(items.Select(i => (0, i.Slot.Name, i.Slot.Id)).ToList(), packageName, saveFolder, Protected(g));
+        var plan = Plan(katya.Select(i => (0, i.Slot.Name, i.Slot.Id)).ToList(), packageName, saveFolder, Protected(g), others.Count);
         var kept = new List<PackageFile>();
         // each original as it stands: from a forge, still to be looked for, or not found (the package is built without it)
         foreach (var o in originals.Where(o => o.Missing is null))
@@ -278,9 +284,56 @@ public static class PackageBuild
                 "the game's own file of each clip this package replaces, and your current mod of it as 1_-_...: delete the package's files and put these back to undo it"));
             files.AddRange(kept);
         }
+        // the other datafiles' clips: each in its datafile's own folder (and every other datafile holding it), its original beside it
+        var other = OtherFiles(g, others);
+        if (other.Count > 0)
+        {
+            int at = files.FindIndex(f => f.Name == OriginalsFolderName + Path.DirectorySeparatorChar);
+            files.InsertRange(at < 0 ? files.Count : at, other.Where(f => f.Original is null).Select(f => new PackageFile(f.Path, f.What)));
+            var origs = other.Where(f => f.Original is not null).Select(f => new PackageFile(f.Path, f.What)).ToList();
+            if (origs.Count > 0 && kept.Count == 0)
+                files.Add(new PackageFile(OriginalsFolderName + Path.DirectorySeparatorChar,
+                    "the game's own file of each clip this package replaces: delete the package's files and put these back to undo it"));
+            files.AddRange(origs);
+        }
         files.AddRange(plan.Files.Where(f => f.Name == MarkerName));
-        plan = plan with { Originals = originals, Files = files };
-        return UnchangedProblem(g, items) is { } same ? plan with { Problem = same } : plan;
+        // an item that is no change first, then the plan's own problem, a file name refused, and a row failing its checks again
+        string? problem = UnchangedProblem(g, items) ?? plan.Problem ?? other.FirstOrDefault(f => f.Problem is not null)?.Problem ?? PackageEntries.BuildRefusal(items);
+        return plan with { Originals = originals, Files = files, Problem = problem };
+    }
+
+    /// <summary>The items of the animation datafile's clips and those of other datafiles' clips, apart.</summary>
+    static (List<PackageItem> Katya, List<PackageItem> Others) Split(GameInstall g, IReadOnlyList<PackageItem> items) =>
+        (items.Where(i => g.PlacesOf(i.Slot).Count == 0).ToList(), items.Where(i => g.PlacesOf(i.Slot).Count > 0).ToList());
+
+    /// <summary>A file of an other datafile's clip in the package: its path in the package (in the datafile's folder, or in the originals
+    /// folder's copy of it), the place, the record, what it is, the original's bytes for an original (null: the package's own file), and why
+    /// it can't be made (or null).</summary>
+    sealed record OtherFile(string Path, DatafilePlace Place, PackageItem Item, string What, byte[]? Original, string? Problem);
+
+    /// <summary>The name a clip's file takes in an other datafile's folder: 1_-_ when the game's own record stands at 2 or later (a repack
+    /// sorts by the number and keeps the first file of each clip, so 1 comes first); the record's own number when it stands at 0 or 1, where
+    /// 1_-_ wouldn't come first: the file then takes the game's own file's name and stands in its place (its original kept apart).</summary>
+    public static string OtherFileName(int recordIndex, string name, ulong id) =>
+        RecordFile.ClipFileName(recordIndex >= 2 ? PackageFileIndex : recordIndex, name, id);
+
+    static List<OtherFile> OtherFiles(GameInstall g, IReadOnlyList<PackageItem> items)
+    {
+        var l = new List<OtherFile>();
+        foreach (var i in items)
+            foreach (var p in g.PlacesOf(i.Slot))
+            {
+                string? problem = null, file = "", orig = "";
+                try { file = OtherFileName(p.RecordIndex, i.Slot.Name, i.Slot.Id); orig = RecordFile.ClipFileName(p.RecordIndex, i.Slot.Name, i.Slot.Id); }
+                catch (RecordFileException ex) { problem = ex.Message; }
+                bool inPlace = p.RecordIndex < 2;
+                l.Add(new OtherFile(Path.Combine(p.FolderName, file), p, i,
+                    $"replaces {i.Slot.Name} in {p.FolderName}" + (inPlace ? $" (the game's own file has this name: put this one in its place)" : ""), null, problem));
+                var rec = g.RecordAt(p, i.Slot.Id);
+                if (rec is not null && g.Vanilla?.StatusOf(i.Slot.Id, rec) == ClipStatus.Vanilla)
+                    l.Add(new OtherFile(Path.Combine(OriginalsFolderName, p.FolderName, orig), p, i, $"the game's own {i.Slot.Name} of {p.FolderName}", rec, problem));
+            }
+        return l;
     }
 
     /// <summary>The name an original is written under: its record's own name (the game's record of the clip, whatever the row kept was
@@ -588,17 +641,35 @@ public static class PackageBuild
     public static PackageBuilt Build(GameInstall g, PackagePlan plan, IReadOnlyList<PackageItem> items, bool replace, string? backupForge = null)
     {
         if (UnchangedProblem(g, items) is { } same) throw new RecordFileException(same);
+        // every row checked again, whatever version of the tool kept it: a game check failed refuses the build, naming the row
+        if (PackageEntries.BuildRefusal(items) is { } failed) throw new RecordFileException(failed);
         if (plan.Problem is { } p) throw new RecordFileException(p);
-        var originals = Originals(g, items, readForges: true, backupForge);
+        var (katya, others) = Split(g, items);
+        var originals = Originals(g, katya, readForges: true, backupForge);
         // a clip whose original wasn't found is built without it (said on the screen and in the result); no original at all: no folder
         // each original under its own record's name, as the plan lists it
         var kept = originals.Where(o => o.Record is not null && FileOf(o) is not null).Select(o => new RecordFileItem(o.Index!.Value, OriginalName(o), o.Slot.Id, o.Record!))
             .Concat(originals.Where(o => CurrentFileOf(o) is not null).Select(o => new RecordFileItem(PackageFileIndex, o.Current!.Name, o.Current.Id, o.Current.Bytes.ToArray())))
             .ToList();
+        var other = OtherFiles(g, others);
+        if (other.FirstOrDefault(f => f.Problem is not null) is { } bad) throw new RecordFileException(bad.Problem!);
         var protect = Protected(g);
-        var built = Build(plan, folder => RecordFileWriter.Write(folder, g.RecordFolderName, protect,
-                items.Select(i => new RecordFileItem(PackageFileIndex, i.Slot.Name, i.Slot.Id, i.Record)).ToList()),
-            kept.Count == 0 ? null : folder => RecordFileWriter.Write(folder, g.RecordFolderName, protect, kept), replace, protect);
+        // each other datafile's files in its own folder, whole or nothing as every write is
+        RecordPackage WriteAll(string folder, IReadOnlyList<RecordFileItem> flat, IEnumerable<IGrouping<string, (string Folder, RecordFileItem Item)>> sub)
+        {
+            var files = new List<WrittenRecordFile>();
+            if (flat.Count > 0) files.AddRange(RecordFileWriter.Write(folder, g.RecordFolderName, protect, flat).Files);
+            foreach (var s in sub)
+                files.AddRange(RecordFileWriter.Write(Path.Combine(folder, s.Key), s.Key, protect, s.Select(x => x.Item).ToList()).Files
+                    .Select(f => f with { FileName = Path.Combine(s.Key, f.FileName) }));
+            return new RecordPackage(folder, g.RecordFolderName, files);
+        }
+        var mine = other.Where(f => f.Original is null).Select(f => (f.Place.FolderName, Item: new RecordFileItem(f.Place.RecordIndex >= 2 ? PackageFileIndex : f.Place.RecordIndex, f.Item.Slot.Name, f.Item.Slot.Id, f.Item.Record)))
+            .GroupBy(x => x.FolderName).ToList();
+        var theirs = other.Where(f => f.Original is not null).Select(f => (f.Place.FolderName, Item: new RecordFileItem(f.Place.RecordIndex, f.Item.Slot.Name, f.Item.Slot.Id, f.Original!)))
+            .GroupBy(x => x.FolderName).ToList();
+        var built = Build(plan, folder => WriteAll(folder, katya.Select(i => new RecordFileItem(PackageFileIndex, i.Slot.Name, i.Slot.Id, i.Record)).ToList(), mine),
+            kept.Count == 0 && theirs.Count == 0 ? null : folder => WriteAll(folder, kept, theirs), replace, protect);
         return built with { Originals = originals };
     }
 
@@ -731,17 +802,42 @@ public static class PackageBuild
         if (!FolderGuard.IsLink(folder))
         {
             foreach (var f in Directory.EnumerateFiles(folder)) TryDelete(f);
+            DeleteDatafileFolders(folder);
             string sub = Path.Combine(folder, OriginalsFolderName);
             if (Directory.Exists(sub))
             {
                 if (!FolderGuard.IsLink(sub))
+                {
                     foreach (var f in Directory.EnumerateFiles(sub)) TryDelete(f);
+                    DeleteDatafileFolders(sub);
+                }
                 try { Directory.Delete(sub); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
         Directory.Delete(folder);
     }
+
+    /// <summary>A build's folders of other datafiles' clips (<c>index_-_name.data</c>) in <paramref name="folder"/>: their record files, then
+    /// each folder once empty; a link standing there is removed as itself, never emptied through.</summary>
+    static void DeleteDatafileFolders(string folder)
+    {
+        foreach (var d in Directory.EnumerateDirectories(folder).Where(IsDatafileFolderName))
+        {
+            if (!FolderGuard.IsLink(d))
+                foreach (var f in Directory.EnumerateFiles(d).Where(f => f.EndsWith(RecordFile.ClipExtension, StringComparison.Ordinal))) TryDelete(f);
+            try { Directory.Delete(d); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    static bool IsDatafileFolderName(string path) => Path.GetFileName(path) is { } n && n.EndsWith(".data", StringComparison.Ordinal) && RecordFile.DatafileNameOf(n) is not null;
+
+    /// <summary>Whether <paramref name="path"/> is a build's folder of an other datafile's clips: a folder of that name (not a link) holding
+    /// record files alone.</summary>
+    static bool IsDatafileFolder(string path) =>
+        IsDatafileFolderName(path) && Directory.Exists(path) && !FolderGuard.IsLink(path)
+        && Directory.EnumerateFileSystemEntries(path).All(e => File.Exists(e) && e.EndsWith(RecordFile.ClipExtension, StringComparison.Ordinal));
 
     const string NothingWritten = "Nothing was written.";
 
@@ -805,7 +901,7 @@ public static class PackageBuild
         if (!IsEarlierBuild(final, MarkedName(plan), restore: false))
             return $"{final} is a package this tool built, but its marker file names another package than \"{MarkedName(plan)}\" (or it is a folder of the game's own files a "
                 + "an earlier version of this tool wrote beside a package), so it isn't replaced: give the package another name or pick another save folder. Nothing was written.";
-        var foreign = Directory.EnumerateFileSystemEntries(final).Where(e => !IsPackageFile(e) && !IsOriginalsFolder(e)).Take(3).ToList();
+        var foreign = Directory.EnumerateFileSystemEntries(final).Where(e => !IsPackageFile(e) && !IsOriginalsFolder(e) && !IsDatafileFolder(e)).Take(3).ToList();
         if (foreign.Count > 0)
             return $"{final} holds things a package doesn't ({string.Join(", ", foreign.Select(Path.GetFileName))}), so it isn't replaced: give the package another name. Nothing was written.";
         return null;
@@ -815,7 +911,7 @@ public static class PackageBuild
     /// holding record files alone.</summary>
     static bool IsOriginalsFolder(string path) =>
         string.Equals(Path.GetFileName(path), OriginalsFolderName, StringComparison.OrdinalIgnoreCase) && Directory.Exists(path) && !FolderGuard.IsLink(path)
-        && Directory.EnumerateFileSystemEntries(path).All(e => File.Exists(e) && e.EndsWith(RecordFile.ClipExtension, StringComparison.Ordinal));
+        && Directory.EnumerateFileSystemEntries(path).All(e => File.Exists(e) && e.EndsWith(RecordFile.ClipExtension, StringComparison.Ordinal) || IsDatafileFolder(e));
 
     /// <summary>Whether <paramref name="folder"/> is itself a link to another place (a junction or a symbolic link), so no build replaces
     /// it (see <see cref="FolderGuard.IsLink(string, out string?)"/>): what the Package screen says of a folder standing at the package's

@@ -533,7 +533,7 @@ public sealed class ChecksTests
         var r = new CheckReport().Add(new CheckResult("a", CheckLevel.Pass, "fine")).Add(new CheckResult("b", CheckLevel.Warn, "hm", 3, "Head"));
         Assert.Equal(CheckLevel.Warn, r.Verdict);
         Assert.Equal("WARN  b: hm (worst at tick 3, Head)", r.Results[1].Line);
-        Assert.Contains("VERDICT: WARN (1 pass, 1 warn, 0 fail)", r.ToText("x"));
+        Assert.Contains("VERDICT: WARN (Game: 1 pass, 1 warn, 0 fail. Look: 0 big differences, 0 notes.)", r.ToText("x"));
         Assert.Equal(CheckLevel.Fail, r.Add(new CheckResult("c", CheckLevel.Fail, "no")).Verdict);
         Assert.Equal(CheckLevel.Pass, new CheckReport().Verdict);
     }

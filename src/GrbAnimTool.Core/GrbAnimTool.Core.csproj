@@ -8,6 +8,8 @@
   <ItemGroup>
     <!-- SHA-256 of every vanilla clip record (hashes only), built by the harness's hash-table command. -->
     <EmbeddedResource Include="Resources\vanilla-clips.txt" LogicalName="GrbAnimTool.Core.vanilla-clips.txt" Condition="Exists('Resources\vanilla-clips.txt')" />
+    <!-- The skeleton of each game clip not on the human body (IDs only), built by the harness's hash-table command. -->
+    <EmbeddedResource Include="Resources\clip-skeletons.txt" LogicalName="GrbAnimTool.Core.clip-skeletons.txt" Condition="Exists('Resources\clip-skeletons.txt')" />
     <!-- The clip index: readable names, categories and the name-part glossary, keyed by clip ID. -->
     <EmbeddedResource Include="Resources\clip-index.json" LogicalName="GrbAnimTool.Core.clip-index.json" />
   </ItemGroup>

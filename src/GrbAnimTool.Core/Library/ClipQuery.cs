@@ -10,7 +10,7 @@ public enum StatusFilter { All, Vanilla, Replaced, Added }
 /// <summary>The column a clip list is sorted by. <see cref="ReadableName"/>, <see cref="Who"/> and <see cref="What"/> are the clip
 /// index's columns (see <see cref="ClipQuery.Index"/>). <see cref="Relevance"/> is no column: the search's best matches first (see
 /// <see cref="ClipSearch"/>), and index order while there is no search text.</summary>
-public enum ClipSort { Name, Index, Length, Ticks, Tracks, Status, ReadableName, Who, What, Relevance }
+public enum ClipSort { Name, Index, Length, Ticks, Tracks, Status, ReadableName, Who, What, Relevance, Datafile }
 
 /// <summary>A search over the clips of an install: a name (or hex ID) text, a status, a family (the name's first part), a length range
 /// and, with the clip index, a who- and a what-category. Every part left empty lets every clip through.</summary>
@@ -152,6 +152,7 @@ public sealed record ClipQuery
             ClipSort.Ticks => (a, b) => a.LastTick.CompareTo(b.LastTick),
             ClipSort.Tracks => (a, b) => a.TrackCount.CompareTo(b.TrackCount),
             ClipSort.Status => (a, b) => a.Status.CompareTo(b.Status),
+            ClipSort.Datafile => (a, b) => string.Compare(a.DatafileName, b.DatafileName, StringComparison.OrdinalIgnoreCase),
             _ => (_, _) => 0,
         };
         list.Sort((a, b) =>

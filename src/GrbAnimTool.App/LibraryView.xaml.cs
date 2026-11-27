@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using GrbAnimTool.Core.Export;
+using GrbAnimTool.Core.Graph;
 using GrbAnimTool.Core.Index;
 using GrbAnimTool.Core.Install;
 using GrbAnimTool.Core.Library;
@@ -55,6 +56,13 @@ public partial class LibraryView : UserControl
         InitializeComponent();
         ClipPanel.ReadableColumnWidth = ClipListPanel.LibraryReadableWidth;
         ClipPanel.Picked += c => { if (c is not null && c != _clip) ShowPicked(c); };
+        // the set bar's own Show every clip
+        ClipPanel.SetLeft += () => { _setShown = null; ShowSet(); };
+        ClipPanel.MultiSelect = true;
+        ClipPanel.SelectionPicked += _ => UpdateExportButtons();
+        // the set each clip is in, once the sets are worked out (the list's data)
+        ClipPanel.AddColumn("Set", 130, "The set the game picks this clip from in one place: random, in turn, blended, or a probable set (grouped by name); hover for its clips",
+            (c, d) => (d as ClipSets)?.Main(c.Id) is { } s ? $"{s.Words}, {s.Clips.Count}" : "", (c, d) => (d as ClipSets)?.Main(c.Id) is { } s ? SetTip(s) : "");
         // the list with a few rows, and the viewer with its timeline, in a window of any height
         PaneScroll.LeastHeight = () => Math.Max(ClipPanel.LeastHeight, LeastViewerHeight);
         PaneScroll.InView.Add((ViewerPane, () => FitScroll.ViewerLeast(ViewerPane, ViewFrame)));
@@ -195,12 +203,15 @@ public partial class LibraryView : UserControl
     /// reason shown, when the install open doesn't hold it (one opened since).</summary>
     public bool ShowFromLog(ClipEntry c)
     {
-        if (_install is null || !_install.Clips.Contains(c))
+        // a clip of any datafile the Library lists, not only the animation datafile's
+        if (_install is null || !_install.AllClips.Contains(c))
         {
             ShowError($"{c.Name} isn't a clip of the game folder open: the log's lines are being looked up in it; click the line again in a moment.");
             return false;
         }
         HideError();
+        // a set shown on its own that doesn't hold the clip is left, as the set bar's Show every clip leaves it
+        if (ClipPanel.ShowingSet && !ClipPanel.Rows.Contains(c)) { ClipPanel.LeaveSet(); _setShown = null; ShowSet(); }
         if (c == _clip)
         {
             // the clip shown already: its row brought back (the search and filters cleared when they hide it) and selected
@@ -234,9 +245,11 @@ public partial class LibraryView : UserControl
         HideError();
         try
         {
-            var g = await Task.Run(() => GameInstall.Open(game, forge));
+            // the other datafiles' lists through their cache, kept with the clip index's (none for an automated run without one)
+            string? cache = _indexCache;
+            var g = await Task.Run(() => GameInstall.Open(game, forge, datafileCache: cache));
             // the search's words are split in the background, not on the first key typed (a key typed sooner waits for it)
-            _ = Task.Run(() => ClipSearch.For(g.Clips));
+            _ = Task.Run(() => ClipSearch.For(g.AllClips));
             var old = _install;
             _install = g;
             // the old install goes even when showing the new one fails: nothing of it is used after this point
@@ -311,12 +324,15 @@ public partial class LibraryView : UserControl
         _index = null;
         _indexError = null;
         FolderText.Text = $"Game folder: {g.GameFolder}    (forge: {g.PatchForgePath})";
-        int v = g.Clips.Count(c => c.Status == ClipStatus.Vanilla), r = g.Clips.Count(c => c.Status == ClipStatus.Replaced),
-            a = g.Clips.Count(c => c.Status == ClipStatus.Added), u = g.Clips.Count(c => c.Status == ClipStatus.Unknown);
-        string s = $"{g.Clips.Count:N0} clips  ·  record folder {g.RecordFolderName}  ·  vanilla {v:N0}  ·  replaced {r:N0}  ·  added {a:N0}";
+        var all = g.AllClips;
+        int v = all.Count(c => c.Status == ClipStatus.Vanilla), r = all.Count(c => c.Status == ClipStatus.Replaced),
+            a = all.Count(c => c.Status == ClipStatus.Added), u = all.Count(c => c.Status == ClipStatus.Unknown);
+        string s = $"{all.Count:N0} clips  ·  record folder {g.RecordFolderName}  ·  vanilla {v:N0}  ·  replaced {r:N0}  ·  added {a:N0}";
         if (u > 0) s += $"  ·  unknown {u:N0}";
+        if (g.Others is { } od) s += $"  ·  {g.Clips.Count:N0} in the animation datafile, {g.OtherClips.Count:N0} in {od.Datafiles.Count:N0} other datafiles";
         if (g.UnpackedFolderPath is not null) s += $"  ·  unpacked folder read: {g.Clips.Count(c => c.FromFile):N0} file(s) beside the forge's, {g.Clips.Count(c => c.Modded):N0} modded";
         if (g.UnpackedFolderError is { } ue) s += $"  ·  {ue}";
+        foreach (var oe in g.OtherUnpackedErrors.Take(3)) s += $"  ·  {oe}";
         if (g.Vanilla is null) s += "  (this copy of the tool has no table of the game's clips)";
         else if (g.VanillaClipsMissing > 0) s += $"  ·  game clips missing {g.VanillaClipsMissing:N0}";
         SummaryText.Text = s;
@@ -326,7 +342,12 @@ public partial class LibraryView : UserControl
         if (_scene is not null) Viewport.Children.Remove(_scene.Visual);
         _scene = new SkeletonScene(g.Skeleton);
         ShowClip(null, play: false);
-        ClipPanel.SetClips(g.Clips);
+        _sets = null;
+        _setsFailed = false;
+        _setShown = null;
+        ClipPanel.ColumnData = null;
+        ClipPanel.SetConstraint(null);
+        ClipPanel.SetClips(g.AllClips);
         ResetCamera();
         ExportText.Text = "";
         UpdateExportButtons();
@@ -334,7 +355,74 @@ public partial class LibraryView : UserControl
         InstallWork.Open(g);
         InstallShown?.Invoke(g, _automated);
         StartIndex(g);
+        _ = ShowSetsAsync(g);
     }
+
+    // ---- the sets ----
+
+    ClipSets? _sets;
+    /// <summary>The set the list is narrowed to ("Show the set"), or null.</summary>
+    ClipSet? _setShown;
+
+    /// <summary>The install's sets when worked out: the Set column fills in, and the clip shown says its set.</summary>
+    async Task ShowSetsAsync(GameInstall g)
+    {
+        var sets = await InstallWork.Sets(g);
+        if (!ReferenceEquals(g, _install)) return;
+        _sets = sets;
+        _setsFailed = sets is null;
+        ClipPanel.ColumnData = sets;
+        ClipPanel.SetSets(sets);
+        ShowSet();
+    }
+
+    /// <summary>The sets couldn't be worked out for the install open (the error log says why).</summary>
+    bool _setsFailed;
+
+    /// <summary>The sets worked out for the install open (for tests).</summary>
+    internal ClipSets? Sets => _sets;
+
+    internal string SetTip(ClipSet s)
+    {
+        var names = s.Clips.Select(id => _install?.FindClip(id)?.Name ?? $"0x{id:X16}");
+        return $"{s.Words} at {s.Where}: {string.Join(", ", names)}"
+            + (s.FromGraph ? "" : ". Grouped by name; the tool couldn't read this set from the game's data. Check it in game.");
+    }
+
+    /// <summary>The clip shown's set under its facts, and Show the set's state.</summary>
+    void ShowSet()
+    {
+        var s = _clip is { } c ? _sets?.Main(c.Id) : null;
+        SetText.Text = _sets is null ? (_install is null ? "-" : _setsFailed ? "The sets couldn't be worked out (the error log says why)." : "Working out the sets…")
+            : _clip is null ? "-"
+            : s is null ? (_sets.ReadByGraph(_clip.Id) ? "In no set: the game plays it alone, or a condition picks it."
+                : "No set known: the game's data for it wasn't read, and no other clip shares its name.")
+            : FormattableString.Invariant($"{char.ToUpperInvariant(s.Words[0])}{s.Words[1..]} of {s.Clips.Count} clips, at {s.Where}")
+              + (s.Kind == ClipSetKind.Blended ? ": the game blends them by that value, so they need matching poses."
+                : FormattableString.Invariant($"; switches blend over {s.PreviewBlend} s{(s.BlendSeconds is null ? " (not read: the usual)" : "")}."));
+        SetText.ToolTip = s is null ? null : SetTip(s);
+        ProbableSetHelp.Visibility = s is { Kind: ClipSetKind.Probable } ? Visibility.Visible : Visibility.Collapsed;
+        ShowSetButton.IsEnabled = _setShown is not null || s is not null;
+        ShowSetButton.Content = _setShown is null ? "Show the set" : "Show every clip";
+    }
+
+    void OnShowSet(object sender, RoutedEventArgs e) => ToggleSet();
+
+    /// <summary>Shows the clip shown's set on its own (the search and the filters put aside, a bar over the list naming it), or, while a
+    /// set is shown, leaves it: every clip again, the search and the filters as they were.</summary>
+    internal void ToggleSet()
+    {
+        if (_setShown is not null) { _setShown = null; ClipPanel.LeaveSet(); }
+        else if (_clip is { } c && _sets?.Main(c.Id) is { } s)
+        {
+            _setShown = s;
+            ClipPanel.ShowSetOnly(SetBarText(s), s.Clips);
+        }
+        ShowSet();
+    }
+
+    /// <summary>The set bar's words: "Set: Idle_Explo (4 clips)".</summary>
+    internal static string SetBarText(ClipSet s) => $"Set: {s.State} ({s.Clips.Count} clips)";
 
     /// <summary>Raised once an install is open and shown: the other screens take it from here (with whether the run is automated).</summary>
     public event Action<GameInstall, bool>? InstallShown;
@@ -406,7 +494,7 @@ public partial class LibraryView : UserControl
             {
                 var r = OpenIndex(g, folder, progress, run.Token);
                 // the list's search with the index's fields is built here, so the first key typed after it doesn't wait for it
-                ClipSearch.For(g.Clips, r.Index.SearchSource);
+                ClipSearch.For(g.AllClips, r.Index.SearchSource);
                 return r;
             });
             if (!ReferenceEquals(run, _indexRun) || !ReferenceEquals(g, _install)) return;
@@ -532,6 +620,7 @@ public partial class LibraryView : UserControl
         _plants = [];
         InfoNote.Text = "";
         ShowIndexInfo(c);
+        ShowSet();
         if (c is null || _install is not { } g)
         {
             foreach (var t in new[] { InfoName, InfoIndex, InfoDuration, InfoTicks, InfoTracks, InfoRot, InfoPos, InfoOther, InfoMover, InfoStatus }) t.Text = Dash;
@@ -545,7 +634,9 @@ public partial class LibraryView : UserControl
         InfoDuration.Text = $"{c.Duration:F3} s";
         InfoTicks.Text = $"{c.LastTick} (frames 0 to {c.LastTick})";
         InfoTracks.Text = c.TrackCount.ToString();
-        InfoStatus.Text = c.StatusText + (c.FilePath is { } file ? $"  ·  file {System.IO.Path.GetFileName(file)}" : "") + (c.Note is { } note ? $"  ·  {note}" : "");
+        InfoStatus.Text = c.StatusText + (c.FilePath is { } file ? $"  ·  file {System.IO.Path.GetFileName(file)}" : "") + (c.Note is { } note ? $"  ·  {note}" : "")
+            + (c.InAnimationDatafile ? "" : $"  ·  in {c.DatafileIndex}_-_{c.DatafileName}.data{(c.AlsoIn.Count > 0 ? $" and {c.AlsoIn.Count} more ({string.Join(", ", c.AlsoIn.Select(p => p.FolderName))})" : "")}")
+            + (c.OnSkeleton.Kind == Core.Skeletons.ClipSkeletonKind.Body ? "" : $"  ·  on {g.SkeletonName(c.OnSkeleton)}");
         InfoStatus.ToolTip = c.FilePath is null && c.Note is null ? null : InfoStatus.Text;
         foreach (var t in new[] { InfoRot, InfoPos, InfoOther, InfoMover }) t.Text = "…";
         Shown();
@@ -579,6 +670,12 @@ public partial class LibraryView : UserControl
                 InfoPos.Text = x.Facts.Positions.ToString();
                 InfoOther.Text = x.Facts.Others.ToString();
                 InfoMover.Text = x.Facts.HasMover ? "yes" : "no";
+                // a clip of another skeleton (an animal, a drone) is drawn on its own
+                if (_scene is null || !ReferenceEquals(_scene.Skeleton, x.Sampler.Skeleton))
+                {
+                    if (_scene is not null) Viewport.Children.Remove(_scene.Visual);
+                    _scene = new SkeletonScene(x.Sampler.Skeleton);
+                }
                 _sampler = x.Sampler;
                 _pose = _sampler.NewPose();
                 _scene?.ShowAddOnFor(c.Record!.Tracks);
@@ -838,7 +935,10 @@ public partial class LibraryView : UserControl
     void UpdateExportButtons()
     {
         SkeletonExportButton.IsEnabled = _install is not null && !_exporting && !_loading;
-        ClipExportButton.IsEnabled = _install is not null && _clip is not null && _sampler is not null && !_exporting && !_loading;
+        int many = ClipPanel.SelectedClips.Count;
+        // several rows selected (Ctrl or Shift): each of them its own .glb in one folder
+        ClipExportButton.Content = many > 1 ? $"Clips .glb ({many})..." : "Clip .glb...";
+        ClipExportButton.IsEnabled = _install is not null && !_exporting && !_loading && (many > 1 || _clip is not null && _sampler is not null);
     }
 
     string? SavePath(string title, string fileName)
@@ -866,8 +966,47 @@ public partial class LibraryView : UserControl
 
     async void OnExportClip(object sender, RoutedEventArgs e)
     {
-        if (_install is null || _clip is null || _sampler is null) return;
+        if (_install is null) return;
+        var many = ClipPanel.SelectedClips;
+        if (many.Count > 1)
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = $"Choose the folder for the {many.Count} clips' .glb files",
+                InitialDirectory = _exportFolder ?? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            };
+            if (dlg.ShowDialog(Window.GetWindow(this)) != true) return;
+            _exportFolder = dlg.FolderName;
+            await ExportClipsAsync(many, dlg.FolderName);
+            return;
+        }
+        if (_clip is null || _sampler is null) return;
         if (SavePath($"Save {_clip.Name} as glTF binary", ClipExport.FileNameFor(_clip.Name)) is { } path) await ExportClipAsync(path);
+    }
+
+    /// <summary>Exports several clips, each as its own .glb (named as the one-clip export names it) with its sidecar, into
+    /// <paramref name="folder"/>, one after another in the background, and says how it went. Returns the first error, or null.</summary>
+    public async Task<string?> ExportClipsAsync(IReadOnlyList<ClipEntry> clips, string folder)
+    {
+        var g = _install!;
+        int done = 0;
+        var failed = new List<string>();
+        var r = await RunExport(() =>
+        {
+            ExportResult? last = null;
+            foreach (var c in clips)
+            {
+                try
+                {
+                    var x = ClipExport.Clip(g, c, Path.Combine(folder, ClipExport.FileNameFor(c.Name)));
+                    if (x.Check.Passed) done++; else failed.Add($"{c.Name}: reading it back doesn't give the clip");
+                    last = x;
+                }
+                catch (ExportException ex) { failed.Add($"{c.Name}: {ex.Message}"); }
+            }
+            return last ?? throw new ExportException(string.Join("; ", failed));
+        }, _ => $"Saved {done} of {clips.Count} clips to {folder}, each with its sidecar." + (failed.Count > 0 ? $" Not saved: {string.Join("; ", failed)}." : ""));
+        return r ?? (failed.Count > 0 ? failed[0] : null);
     }
 
     /// <summary>Exports the skeleton to <paramref name="path"/> in the background and says how it went in the window. Returns an error

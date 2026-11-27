@@ -4,6 +4,7 @@ using GrbAnimTool.Core.Clips;
 using GrbAnimTool.Core.Datafiles;
 using GrbAnimTool.Core.Forge;
 using GrbAnimTool.Core.Oodle;
+using GrbAnimTool.Core.Records;
 using GrbAnimTool.Core.Skeletons;
 
 namespace GrbAnimTool.Core.Install;
@@ -16,23 +17,51 @@ public sealed class GameInstallException(string message, Exception? inner = null
 /// kept), and how it stands against the game's own clip.</summary>
 public sealed class ClipEntry
 {
-    /// <summary>The record's index within the animation datafile; a record file for this clip is named "index_-_name.Animation".</summary>
+    /// <summary>The record's index within its datafile; a record file for this clip is named "index_-_name.Animation".</summary>
     public required int Index { get; init; }
     public required ulong Id { get; init; }
     public required string Name { get; init; }
-    /// <summary>The whole record as the datafile holds it (a view into the decoded datafile).</summary>
-    public required ReadOnlyMemory<byte> Bytes { get; init; }
+
+    ReadOnlyMemory<byte> _bytes;
+    ClipRecord? _record;
+    string? _parseError;
+    Lazy<(ReadOnlyMemory<byte> Bytes, ClipRecord? Record, string? Error)>? _load;
+
+    /// <summary>The whole record as the datafile holds it (a view into the decoded datafile). A row of another datafile than the
+    /// animation one reads it from the game's files the first time it is asked for (<see cref="Loaded"/>).</summary>
+    public required ReadOnlyMemory<byte> Bytes { get => _load is null ? _bytes : _load.Value.Bytes; init => _bytes = value; }
     /// <summary>The parsed record, or null when its head can't be read (<see cref="ParseError"/> says why).</summary>
-    public ClipRecord? Record { get; init; }
-    public string? ParseError { get; init; }
+    public ClipRecord? Record { get => _load is null ? _record : _load.Value.Record; init => _record = value; }
+    public string? ParseError { get => _load is null ? _parseError : _load.Value.Error; init => _parseError = value; }
     public ClipStatus Status { get; init; }
 
+    /// <summary>Reads the record when it is first asked for (another datafile's row): what it gives stands for <see cref="Bytes"/>,
+    /// <see cref="Record"/> and <see cref="ParseError"/>; read once, whatever thread asks.</summary>
+    internal Func<(ReadOnlyMemory<byte> Bytes, ClipRecord? Record, string? Error)> Load
+    {
+        init => _load = new(value, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    /// <summary>Whether the record is in memory (always, but for another datafile's row not yet read).</summary>
+    public bool Loaded => _load is null || _load.IsValueCreated;
+
+    /// <summary>What the list shows of a row not read yet: its length, ticks, tracks and whether its curves read to its end, as the tool
+    /// found them when it last read the datafile.</summary>
+    internal (float Duration, int LastTick, int Tracks, bool Walked)? Facts { get; init; }
+
     /// <summary>The clip's length in seconds, or 0 when the record states none in range (<see cref="ClipRecord.DurationValid"/>).</summary>
-    public float Duration => Record is { DurationValid: true } r ? r.Duration : 0;
+    public float Duration => !Loaded && Facts is { } f ? f.Duration : Record is { DurationValid: true } r ? r.Duration : 0;
     /// <summary>The clip's length in ticks of 1/60 s (duration x 60, rounded); it has one more frame than this, tick 0 included.</summary>
-    public int LastTick => Record?.LastTick ?? 0;
-    public int TrackCount => Record?.Tracks.Count ?? 0;
-    public bool WalkedToEnd => Record?.WalkedToEnd ?? false;
+    public int LastTick => !Loaded && Facts is { } f ? f.LastTick : Record?.LastTick ?? 0;
+    public int TrackCount => !Loaded && Facts is { } f ? f.Tracks : Record?.Tracks.Count ?? 0;
+    public bool WalkedToEnd => !Loaded && Facts is { } f ? f.Walked : Record?.WalkedToEnd ?? false;
+
+    /// <summary>The skeleton the clip moves (<see cref="ClipSkeleton"/>): the human body the tool poses the player's clips on, another of
+    /// the game's skeletons, or none the tool can name.</summary>
+    public ClipSkeleton OnSkeleton { get; init; } = ClipSkeleton.Body;
+
+    /// <summary>The other datafiles that hold this same clip (its ID), each a place a replacement goes too; empty for most clips.</summary>
+    public IReadOnlyList<DatafilePlace> AlsoIn { get; init; } = [];
 
     /// <summary>The record file of the unpacked datafile folder this row stands for, or null (no unpacked folder, or no file holds it).</summary>
     public string? FilePath { get; init; }
@@ -47,17 +76,31 @@ public sealed class ClipEntry
     /// <summary>The numbers of the folder's other files holding exactly this row's bytes (the game's own file beside a 1_-_ copy of it).</summary>
     public IReadOnlyList<int> SameFileNumbers { get; init; } = [];
 
+    /// <summary>The datafile the record is in: its forge entry's name, its index in the forge (the prefix of its unpacked folder's name,
+    /// <c>index_-_name.data</c>) and its ID. Empty for a row made outside an install.</summary>
+    public string DatafileName { get; init; } = "";
+    public int DatafileIndex { get; init; }
+    public ulong DatafileId { get; init; }
+    /// <summary>Whether the record is in the animation datafile (MIS_Y2E4_Katya_Maksimov), where the player's clips are.</summary>
+    public bool InAnimationDatafile => DatafileId == GameInstall.AnimationDatafileId;
+    /// <summary>Whether the datafile is the patch forge's (else the base forge's: the patch doesn't hold it).</summary>
+    public bool InPatchForge { get; init; } = true;
+
     readonly ulong _key;
     /// <summary>The row's own key, for anything worked out per row: the clip's ID for a forge row, a key of its own for a
     /// <see cref="FromFile"/> row (the top bit set, from the file's bytes), so two rows of one clip never share what was worked out.</summary>
-    public ulong Key { get => FromFile ? _key : Id; init => _key = value; }
+    public ulong Key { get => FromFile || _key != 0 ? _key : Id; init => _key = value; }
 
     /// <summary>The Status column's text: the status, with "modded" for a file that replaces the game's version.</summary>
     public string StatusText => !Modded ? Status.ToString() : Status == ClipStatus.Vanilla ? "Modded (vanilla)" : "Modded";
 }
 
 /// <summary>How long each step of opening the install took.</summary>
-public sealed record OpenTimings(TimeSpan Oodle, TimeSpan ForgeIndex, TimeSpan AnimationDatafile, TimeSpan SharedTable, TimeSpan Skeletons, TimeSpan Clips, TimeSpan Total);
+public sealed record OpenTimings(TimeSpan Oodle, TimeSpan ForgeIndex, TimeSpan AnimationDatafile, TimeSpan SharedTable, TimeSpan Skeletons, TimeSpan Clips, TimeSpan Total)
+{
+    /// <summary>Reading the other datafiles' lists (through their cache when there is one).</summary>
+    public TimeSpan OtherDatafiles { get; init; }
+}
 
 /// <summary>A game install, opened read-only from its game folder: the patch forge's animation datafile with every clip, the shared curve
 /// table, and the body skeleton merged with the fake-gun add-on. Entries are found by ID, never by index or by a forge's hash. The forges
@@ -110,10 +153,23 @@ public sealed class GameInstall : IDisposable
     /// <summary>The table of the game's own clips, or null when this build has none (every clip is then <see cref="ClipStatus.Unknown"/>).</summary>
     public VanillaClipHashes? Vanilla { get; }
     /// <summary>Clips of the game's own table that the user's datafile lacks.</summary>
-    public int VanillaClipsMissing { get; }
+    public int VanillaClipsMissing => Vanilla is null ? 0 : Vanilla.Ids.Count(id => !_byId.ContainsKey(id));
     public OpenTimings Timings { get; }
 
     readonly Dictionary<ulong, ClipEntry> _byId = [];
+
+    /// <summary>The clips of every other datafile of the forges that holds any (one row a clip, at the first datafile that holds it; the
+    /// others in <see cref="ClipEntry.AlsoIn"/>), their records read when first needed; then the rows of their unpacked folders' files.</summary>
+    public IReadOnlyList<ClipEntry> OtherClips { get; private set; } = [];
+    /// <summary>Every row: the animation datafile's (<see cref="Clips"/>), then the other datafiles' (<see cref="OtherClips"/>).</summary>
+    public IReadOnlyList<ClipEntry> AllClips { get; private set; } = [];
+    /// <summary>What reading the other datafiles found: the datafiles, the entries looked at, those that didn't read, the cache's part.</summary>
+    public OtherDatafiles? Others { get; private set; }
+    /// <summary>Why an other datafile's unpacked folder couldn't be read (its rows then left out), one line each.</summary>
+    public IReadOnlyList<string> OtherUnpackedErrors { get; private set; } = [];
+
+    // the forges' entries by ID (where each payload stands), to read a skeleton record later; the patch's first
+    Dictionary<ulong, ForgeEntry> _patchEntries = [], _baseEntries = [];
 
     GameInstall(string game, string patch, string baseForge, OodleLibrary oodle, ForgeEntry animEntry, List<DatafileRecord> records, List<ClipEntry> clips,
         SharedCurveTable table, Skeleton body, Skeleton addOn, BoneNames names, VanillaClipHashes? vanilla, OpenTimings timings)
@@ -122,21 +178,254 @@ public sealed class GameInstall : IDisposable
         ForgeClips = clips.Where(c => !c.FromFile).ToList();
         SharedTable = table; BodySkeleton = body; AddOnSkeleton = addOn; Skeleton = Skeleton.Merge(body, addOn); Names = names; Vanilla = vanilla; Timings = timings;
         foreach (var c in clips) _byId.TryAdd(c.Id, c);
-        if (vanilla is not null) VanillaClipsMissing = vanilla.Ids.Count(id => !_byId.ContainsKey(id));
+        AllClips = clips;
         // every writer's guard knows the install's own records, to tell the game's unpacked files from a folder of the player's own
         IO.FolderGuard.Remember(this);
     }
 
-    public ClipEntry? FindClip(ulong id) => _byId.GetValueOrDefault(id);
-    public ClipEntry? FindClip(string name) => Clips.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+    /// <summary>Takes the other datafiles' lists: a row each clip (by ID, at the first datafile holding it), its record read from its
+    /// forge when first asked for; then each datafile's unpacked folder beside its forge, when there is one, as the animation datafile's.</summary>
+    void TakeOthers(OtherDatafiles others, VanillaClipHashes? vanilla, string? unpackedRoot)
+    {
+        Others = others;
+        var katya = Clips.Select(c => c.Id).ToHashSet();
+        var places = new Dictionary<ulong, List<(OtherDatafile D, OtherClip C)>>();
+        var order = new List<ulong>();
+        foreach (var d in others.Datafiles.OrderBy(d => !d.InPatch).ThenBy(d => d.Index))
+            foreach (var c in d.Clips)
+            {
+                if (!places.TryGetValue(c.Id, out var l)) { places[c.Id] = l = []; order.Add(c.Id); }
+                l.Add((d, c));
+            }
+        // a clip as one datafile holds it: the row of its first datafile, or a stand-in for its copy in another (see below)
+        ClipEntry RowAt(OtherDatafile d, OtherClip c, IReadOnlyList<(OtherDatafile D, OtherClip C)> l, ClipStatus status) => new()
+        {
+            Index = c.RecordIndex, Id = c.Id, Name = c.Name, Bytes = ReadOnlyMemory<byte>.Empty, Load = () => LoadOther(d, c),
+            Facts = (c.Duration, c.LastTick, c.Tracks, c.Walked),
+            Status = status,
+            OnSkeleton = c.Skeleton, DatafileName = d.Name, DatafileIndex = d.Index, DatafileId = d.Id, InPatchForge = d.InPatch,
+            AlsoIn = l.Where(x => x.D != d).Select(x => new DatafilePlace(x.D.InPatch ? PatchForgePath : BaseForgePath, x.D.Index, x.D.Id, x.D.Name, x.C.RecordIndex)).ToList(),
+            // a clip of the animation datafile's ID in another datafile too: a row of its own, never sharing its key
+            Key = katya.Contains(c.Id) ? UnpackedFolder.RowKeyOf(d.Id, BitConverter.GetBytes(c.Id)) : 0,
+        };
+        ClipStatus StatusOf(OtherClip c) => vanilla?.StatusOfSha256(c.Id, c.Sha256) ?? ClipStatus.Unknown;
+        var rows = new List<ClipEntry>(order.Count);
+        foreach (var id in order)
+        {
+            var l = places[id];
+            // the clip is the game's own only when every datafile's copy is; else it shows as the first copy that isn't
+            var status = l.Select(x => StatusOf(x.C)).FirstOrDefault(s => s != ClipStatus.Vanilla, ClipStatus.Vanilla);
+            rows.Add(RowAt(l[0].D, l[0].C, l, status));
+        }
+        // each other datafile's unpacked folder, as the animation datafile's: its files' rows beside the forge's. The folder holds the
+        // game's own file of every clip the datafile holds, those whose row stands at another datafile too: each of those is read against
+        // a stand-in for the datafile's own copy, which is then left out of the list (the game's own file of it is no row; a file of the
+        // player's beside it is)
+        var errors = new List<string>();
+        foreach (var forge in new[] { PatchForgePath, BaseForgePath })
+        {
+            // the unpack's own place beside each forge, or the one root given (for the patch forge's datafiles alone)
+            string root = unpackedRoot is null ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(forge)) ?? "", "Extracted", Path.GetFileName(forge), "Extracted")
+                : forge == PatchForgePath ? unpackedRoot : "";
+            if (root.Length == 0 || !Directory.Exists(root)) continue;
+            bool inPatch = forge == PatchForgePath;
+            foreach (var d in others.Datafiles.Where(d => d.InPatch == inPatch))
+            {
+                string folder = Path.Combine(root, RecordFile.DatafileFolderName(d.Index, d.Name));
+                if (!Directory.Exists(folder)) continue;
+                var mine = rows.Where(r => !r.FromFile && r.DatafileId == d.Id && r.InPatchForge == inPatch).ToList();
+                var mineIds = mine.Select(r => r.Id).ToHashSet();
+                var stand = d.Clips.Where(c => !mineIds.Contains(c.Id)).Select(c => RowAt(d, c, places[c.Id], StatusOf(c))).ToList();
+                var standIds = stand.Select(r => r.Id).ToHashSet();
+                try
+                {
+                    var got = UnpackedFolder.Rows(folder, [.. mine, .. stand], vanilla)
+                        .Where(r => r.FromFile || !standIds.Contains(r.Id)).ToList();
+                    int at = mine.Count > 0 ? rows.IndexOf(mine[0]) : rows.Count;
+                    foreach (var r in mine) rows.Remove(r);
+                    rows.InsertRange(Math.Min(at, rows.Count), got);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                { errors.Add($"The unpacked folder {folder} couldn't be read, so its files aren't listed: {ex.Message}"); }
+            }
+        }
+        OtherUnpackedErrors = errors;
+        OtherClips = rows;
+        AllClips = [.. Clips, .. rows];
+        foreach (var r in rows) _byId.TryAdd(r.Id, r);
+    }
 
-    /// <summary>A pose sampler for one clip on the merged skeleton. Refuses a clip whose curves don't read to the record's end (or don't
-    /// match its track list one to one): pairing curves and tracks by position would then give a wrong pose without a word.</summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<(bool, ulong), Lazy<List<DatafileRecord>>> _otherRecords = new();
+
+    /// <summary>An other datafile's clip record, read from its forge now (the datafile decoded once, its clip records kept); a failure is
+    /// said, not thrown.</summary>
+    (ReadOnlyMemory<byte>, ClipRecord?, string?) LoadOther(OtherDatafile d, OtherClip c)
+    {
+        try
+        {
+            using var hold = Hold();
+            var recs = _otherRecords.GetOrAdd((d.InPatch, d.Id), _ => new Lazy<List<DatafileRecord>>(() =>
+                OtherDatafiles.ReadRecords(d.InPatch ? PatchForgePath : BaseForgePath, d, Oodle).Where(r => r.Type == ClipRecord.Type)
+                    .Select(r => new DatafileRecord { Index = r.Index, Id = r.Id, Type = r.Type, Name = r.Name, Bytes = r.Bytes.ToArray(), Opaque = r.Opaque }).ToList())).Value;
+            return OtherDatafiles.RecordOf(recs, c.RecordIndex, c.Id);
+        }
+        catch (ObjectDisposedException) { return (ReadOnlyMemory<byte>.Empty, null, "the game folder was closed before its record was read"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or OodleException)
+        {
+            return (ReadOnlyMemory<byte>.Empty, null, $"its record can't be read from {d.Index}_-_{d.Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Every place an other datafile's clip is (its first datafile's, then those of <see cref="ClipEntry.AlsoIn"/>), each with
+    /// the record's index in that datafile; empty for the animation datafile's clips. A row of an unpacked folder's file stands for the
+    /// forge's clip of its ID.</summary>
+    public IReadOnlyList<DatafilePlace> PlacesOf(ClipEntry c)
+    {
+        if (c.InAnimationDatafile || c.DatafileName.Length == 0) return [];
+        // a file's row (in any of the clip's datafiles' folders) stands for the clip's row at its first datafile
+        var row = c.FromFile ? OtherClips.FirstOrDefault(x => !x.FromFile && x.Id == c.Id) ?? c : c;
+        if (row.FromFile) return [];
+        return [new DatafilePlace(row.InPatchForge ? PatchForgePath : BaseForgePath, row.DatafileIndex, row.DatafileId, row.DatafileName, row.Index), .. row.AlsoIn];
+    }
+
+    /// <summary>The record an other datafile holds at <paramref name="p"/> for clip <paramref name="id"/>, read now (null when it can't be).</summary>
+    public byte[]? RecordAt(DatafilePlace p, ulong id)
+    {
+        bool inPatch = p.ForgePath == PatchForgePath;
+        var d = Others?.Datafiles.FirstOrDefault(x => x.InPatch == inPatch && x.Id == p.Id);
+        var c = d?.Clips.FirstOrDefault(x => x.RecordIndex == p.RecordIndex && x.Id == id);
+        if (d is null || c is null) return null;
+        var (bytes, _, err) = LoadOther(d, c);
+        return err is null || bytes.Length > 0 ? bytes.ToArray() : null;
+    }
+
+    /// <summary>The graph documents of the other datafiles that hold any (read now, each datafile decoded once more), and why a datafile or a
+    /// document didn't read: the sets of the other datafiles' clips are read from these, where they read.</summary>
+    public (List<Graph.GraphDocument> Documents, List<string> Failures) OtherGraphDocuments()
+    {
+        var docs = new List<Graph.GraphDocument>();
+        var failed = new List<string>();
+        foreach (var d in Others?.Datafiles.Where(d => d.HasGraph) ?? [])
+        {
+            try
+            {
+                using var hold = Hold();
+                foreach (var r in OtherDatafiles.ReadRecords(d.InPatch ? PatchForgePath : BaseForgePath, d, Oodle).Where(r => Graph.GraphDocument.IsDocumentType(r.Type)))
+                {
+                    try { docs.Add(Graph.GraphDocument.Read(r)); }
+                    catch (Graph.GraphDocumentException ex) { failed.Add($"{d.Index}_-_{d.Name}: {r.Name}: {ex.Message}"); }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or OodleException or ObjectDisposedException) { failed.Add($"{d.Index}_-_{d.Name}: {ex.Message}"); }
+        }
+        return (docs, failed);
+    }
+
+    public ClipEntry? FindClip(ulong id) => _byId.GetValueOrDefault(id);
+    public ClipEntry? FindClip(string name) => AllClips.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+
+    readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, Lazy<(Skeleton? Skeleton, string Name, string? Error)>> _own = new();
+
+    /// <summary>The skeleton a clip is posed on: the merged body skeleton for a clip on the body, the game's own skeleton record for one on
+    /// another (read from the forges once), or null when the clip's skeleton isn't known or can't be read (<see cref="SkeletonName"/> says
+    /// why).</summary>
+    public Skeleton? SkeletonOf(ClipEntry c) => c.OnSkeleton.Kind switch
+    {
+        ClipSkeletonKind.Body => Skeleton,
+        ClipSkeletonKind.Own => Own(c.OnSkeleton).Skeleton,
+        _ => null,
+    };
+
+    /// <summary>The skeleton's name in the screens' words: "the human body", the game's skeleton record's name, or why it isn't known.</summary>
+    public string SkeletonName(ClipSkeleton k) => k.Kind switch
+    {
+        ClipSkeletonKind.Body => "the human body",
+        ClipSkeletonKind.Own => Own(k) is { Skeleton: not null } o ? $"the {o.Name} skeleton" : $"skeleton 0x{k.SkeletonId:X16} ({Own(k).Error})",
+        _ => "a skeleton the tool can't determine",
+    };
+
+    (Skeleton? Skeleton, string Name, string? Error) Own(ClipSkeleton k) => _own.GetOrAdd(k.SkeletonId, _ => new(() =>
+    {
+        try
+        {
+            using var hold = Hold();
+            foreach (var (path, entries) in new[] { (PatchForgePath, _patchEntries), (BaseForgePath, _baseEntries) })
+            {
+                if (!entries.TryGetValue(k.EntryId, out var e)) continue;
+                using var fs = OpenForge(path);
+                var r = DecodeRecords(ForgeReader.ReadPayload(fs, e), Oodle, $"entry 0x{e.Id:X16} in {path}").FirstOrDefault(x => x.Id == k.SkeletonId && x.Type == Skeletons.Skeleton.Type);
+                if (r is null) continue;
+                var names = BoneNames.Default();
+                names.AddFrom(r.Bytes.Span);
+                return ((Skeleton?)Skeletons.Skeleton.Parse(r.Bytes.Span, names), r.Name, (string?)null);
+            }
+            return (null, "", "its record isn't in the game's files");
+        }
+        catch (Exception ex) when (ex is GameInstallException or InvalidDataException or IOException or ObjectDisposedException or OodleException)
+        {
+            return (null, "", ex.Message);
+        }
+    })).Value;
+
+    /// <summary>Why <paramref name="source"/>'s motion (null: a .glb) can't be put on <paramref name="slot"/> by its skeleton, or null when it
+    /// can: the slot's skeleton must be known and, for a clip source, the source's too; then the two must be the same skeleton, or the
+    /// source's skeleton must hold at least <see cref="ClipSkeletons.MapShare"/> of the bones the slot keys (the track map's rule then
+    /// takes each by name). A .glb is checked against the slot's skeleton by the import itself.</summary>
+    public string? ReplaceProblem(ClipEntry slot, ClipEntry? source)
+    {
+        if (SkeletonOf(slot) is null) return $"{slot.Name} is on {SkeletonName(slot.OnSkeleton)}, so it can't be edited.";
+        if (source is null) return null;
+        if (SkeletonOf(source) is not { } ss) return $"{source.Name} is on {SkeletonName(source.OnSkeleton)}, so its motion can't be put on {slot.Name}.";
+        var a = slot.OnSkeleton; var b = source.OnSkeleton;
+        if (a.Kind == b.Kind && (a.Kind == ClipSkeletonKind.Body || a.SkeletonId == b.SkeletonId)) return null;
+        if (slot.Record is not { } rec) return null;
+        double share = ClipSkeletons.Shared(ClipSkeletons.BoneTracks(rec, SharedTable), ss);
+        return share >= ClipSkeletons.MapShare ? null
+            : FormattableString.Invariant($"{slot.Name} is on {SkeletonName(a)} and {source.Name} on {SkeletonName(b)}: only {share * 100:F0}% of the bones {slot.Name} keys are in {source.Name}'s skeleton, so its motion can't be put on it.");
+    }
+
+    /// <summary>For the harness's table command, on the game's own files: every clip of the other datafiles not on the body, with the
+    /// smallest skeleton record of the two forges holding every bone it keys (of equals, the patch's, then the lowest ID) and the entry
+    /// holding that record; clips no one record holds are left out. Decodes every entry of both forges (a minute or so).</summary>
+    public List<(ulong Clip, ulong Skeleton, ulong Entry)> ClipSkeletonTable()
+    {
+        var skels = new List<(ulong Id, ulong Entry, bool InPatch, HashSet<uint> Bones)>();
+        foreach (var (path, entries, inPatch) in new[] { (PatchForgePath, _patchEntries, true), (BaseForgePath, _baseEntries, false) })
+        {
+            using var fs = OpenForge(path);
+            foreach (var e in entries.Values)
+            {
+                List<DatafileRecord> recs;
+                try { recs = DatafileCodec.Parse(DatafileCodec.Decode(ForgeReader.ReadPayload(fs, e), Oodle, out int t, out _), t); }
+                catch (InvalidDataException) { continue; }
+                foreach (var r in recs.Where(r => r.Type == Skeletons.Skeleton.Type))
+                {
+                    try { skels.Add((r.Id, e.Id, inPatch, Skeletons.Skeleton.Parse(r.Bytes.Span).Bones.Select(b => b.Hash).ToHashSet())); }
+                    catch (InvalidDataException) { }
+                }
+            }
+        }
+        var rows = new List<(ulong, ulong, ulong)>();
+        foreach (var c in OtherClips.Where(c => !c.FromFile && c.OnSkeleton.Kind != ClipSkeletonKind.Body).DistinctBy(c => c.Id))
+        {
+            if (c.Record is not { } rec) continue;
+            var bones = ClipSkeletons.BoneTracks(rec, SharedTable);
+            if (bones.Count == 0) continue;
+            var best = skels.Where(s => bones.All(s.Bones.Contains)).OrderBy(s => s.Bones.Count).ThenBy(s => !s.InPatch).ThenBy(s => s.Id).FirstOrDefault();
+            if (best.Bones is not null) rows.Add((c.Id, best.Id, best.Entry));
+        }
+        return rows;
+    }
+
+    /// <summary>A pose sampler for one clip on its own skeleton (<see cref="SkeletonOf"/>). Refuses a clip whose skeleton isn't known, or
+    /// whose curves don't read to the record's end (or don't match its track list one to one): pairing curves and tracks by position would
+    /// then give a wrong pose without a word.</summary>
     public PoseSampler CreateSampler(ClipEntry clip)
     {
         var record = clip.Record ?? throw new InvalidOperationException($"clip {clip.Name} can't be read: {clip.ParseError}");
         if (!record.WalkedToEnd) throw new InvalidOperationException($"clip {clip.Name} can't be played: {record.Stop}");
-        return new(Skeleton, record, SharedTable);
+        var s = SkeletonOf(clip) ?? throw new InvalidOperationException($"clip {clip.Name} can't be played: its skeleton is {SkeletonName(clip.OnSkeleton)}");
+        return new(s, record, SharedTable);
     }
 
     /// <summary>Opens the install in <paramref name="gameFolder"/>: its Oodle DLL (checked against the pins), its patch forge (or
@@ -145,10 +434,14 @@ public sealed class GameInstall : IDisposable
     /// <para>The animation datafile's unpacked folder (<paramref name="unpackedFolder"/>; null: the one beside the patch forge, when there
     /// is one; "": none) adds its files' rows (<see cref="UnpackedFolder"/>). A folder that can't be read leaves them out and says why
     /// (<see cref="UnpackedFolderError"/>); it never fails the open.</para></summary>
-    public static GameInstall Open(string gameFolder, string? patchForge = null, string? unpackedFolder = null)
+    /// <para>The other datafiles that hold clips are read too (<see cref="OtherClips"/>), through their cache in
+    /// <paramref name="datafileCache"/> when given (the tool's own folder; null: every entry decoded, nothing kept), with their unpacked
+    /// folders from <paramref name="otherUnpackedRoot"/> (the folder holding <c>index_-_name.data</c> folders; null: the unpack's own beside
+    /// each forge; "": none).</para>
+    public static GameInstall Open(string gameFolder, string? patchForge = null, string? unpackedFolder = null, string? datafileCache = null, string? otherUnpackedRoot = null)
     {
         var at = new OpenStep();
-        try { return OpenSteps(gameFolder, patchForge, unpackedFolder, at); }
+        try { return OpenSteps(gameFolder, patchForge, unpackedFolder, datafileCache, otherUnpackedRoot, at); }
         catch (Exception ex)
         {
             at.Oodle?.Dispose();
@@ -164,7 +457,7 @@ public sealed class GameInstall : IDisposable
         public OodleLibrary? Oodle;
     }
 
-    static GameInstall OpenSteps(string gameFolder, string? patchForge, string? unpackedFolder, OpenStep at)
+    static GameInstall OpenSteps(string gameFolder, string? patchForge, string? unpackedFolder, string? datafileCache, string? otherUnpackedRoot, OpenStep at)
     {
         var total = Stopwatch.StartNew();
         if (!Directory.Exists(gameFolder)) throw new GameInstallException($"The game folder {gameFolder} doesn't exist.");
@@ -184,6 +477,9 @@ public sealed class GameInstall : IDisposable
 
         ForgeEntry animEntry; List<DatafileRecord> records; SharedCurveTable table; Skeleton body, addOn; byte[] bodyRec, addOnRec;
         string? controlOn;
+        OtherDatafiles others;
+        ForgeLayout patchLay, baseLayout;
+        TimeSpan tOthers;
         var otherNames = new Dictionary<ulong, string>();
         TimeSpan tIndex, tAnim, tTable, tSkel;
         var names = BoneNames.Default();
@@ -241,7 +537,14 @@ public sealed class GameInstall : IDisposable
             at.Step = addOnStep;
             addOn = Skeleton.Parse(addOnRec, names, addOn: true);
             tSkel = sw.Elapsed;
+            patchLay = lay; baseLayout = baseLay;
         }
+
+        sw.Restart();
+        at.Step = "Reading the other datafiles that hold clips";
+        others = OtherDatafiles.Read(patch, patchLay, patchStamp, baseForge, baseLayout, baseStamp, oodle, table, body, datafileCache,
+            Export.ClipExport.ProtectedFolders(gameFolder, patch));
+        tOthers = sw.Elapsed;
 
         sw.Restart();
         at.Step = "Reading the clips of the animation datafile";
@@ -263,6 +566,7 @@ public sealed class GameInstall : IDisposable
             {
                 Index = r.Index, Id = r.Id, Name = r.Name, Bytes = own, Record = c, ParseError = err,
                 Status = vanilla?.StatusOf(r.Id, own) ?? ClipStatus.Unknown,
+                DatafileName = animEntry.Name, DatafileIndex = animEntry.Index, DatafileId = animEntry.Id,
             });
         }
         at.Step = "Reading the unpacked animation datafile's folder";
@@ -277,12 +581,17 @@ public sealed class GameInstall : IDisposable
         else if (unpackedFolder is { Length: > 0 }) unpackedError = $"The unpacked folder {unpackedFolder} isn't there.";
         if (unpacked is not null && !Directory.Exists(unpacked)) unpacked = null;
         var tClips = sw.Elapsed;
-        return new GameInstall(gameFolder, patch, baseForge, oodle, animEntry, records, clips, table, body, addOn, names, vanilla,
-            new OpenTimings(tOodle, tIndex, tAnim, tTable, tSkel, tClips, total.Elapsed))
+        var g = new GameInstall(gameFolder, patch, baseForge, oodle, animEntry, records, clips, table, body, addOn, names, vanilla,
+            new OpenTimings(tOodle, tIndex, tAnim, tTable, tSkel, tClips, total.Elapsed) { OtherDatafiles = tOthers })
         {
             UnpackedFolderPath = unpackedError is null ? unpacked : null, UnpackedFolderError = unpackedError, OtherClipNames = otherNames,
             ControlDecodeOn = controlOn, BodySkeletonRecord = bodyRec, AddOnSkeletonRecord = addOnRec, PatchForgeStamp = patchStamp, BaseForgeStamp = baseStamp,
         };
+        foreach (var e in patchLay.Entries) g._patchEntries.TryAdd(e.Id, e);
+        foreach (var e in baseLayout.Entries) g._baseEntries.TryAdd(e.Id, e);
+        at.Step = "Reading the other datafiles' unpacked folders";
+        g.TakeOthers(others, vanilla, otherUnpackedRoot);
+        return g;
     }
 
     static (long Length, long WriteTimeUtcTicks) Stamp(string file)

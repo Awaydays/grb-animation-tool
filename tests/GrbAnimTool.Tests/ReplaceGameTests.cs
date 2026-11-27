@@ -58,9 +58,9 @@ public sealed class ReplaceGameTests(InstallFixture f)
         var src = Enemy(longer: true);
         var m = Motion.FromClip(g.Skeleton, src.Record!, g.SharedTable);
         int start = ClipFit.SuggestCut(m, slot.LastTick)!.Value;
-        // the suggestion is at least as good as every other start
-        double best = ClipFit.PoseDistance(m, start, start + slot.LastTick);
-        for (int s = 0; s <= m.LastTick - slot.LastTick; s += 7) Assert.True(best <= ClipFit.PoseDistance(m, s, s + slot.LastTick) + 1e-4);
+        // the suggestion is at least as good as every other start, by the pose and the feet
+        double best = ClipFit.MatchDistance(m, start, m, start + slot.LastTick);
+        for (int s = 0; s <= m.LastTick - slot.LastTick; s += 7) Assert.True(best <= ClipFit.MatchDistance(m, s, m, s + slot.LastTick) + 1e-4);
         var r = ClipReplace.FromClip(g.Skeleton, g.SharedTable, slot, src, new FitOptions { Mode = FitMode.Cut, CutStart = start, Loop = true, RootScale = 0 });
         var played = r.Imported;
         // as the game will play it: the last frame stands within the curves' rounding of the first, on every bone written
@@ -74,6 +74,24 @@ public sealed class ReplaceGameTests(InstallFixture f)
         double gap = 0;
         for (int b = 0; b < g.Skeleton.Bones.Count; b++) gap = Math.Max(gap, Core.Export.GltfAxes.AngleDeg(open.Local(0, b).Rotation, open.Local(open.LastTick, b).Rotation));
         Assert.True(gap > worst, $"without the loop the seam is {gap:F3} deg");
+    }
+
+    /// <summary>A single clip's Replace with its start given keeps its bytes (the wade idle on fm_std_V0_idle_cool_01 from frame 674 with the loop):
+    /// its loop keeps the feet where they stand, so keeping planted feet changes nothing; the control, the same with the line-up pose of a
+    /// stance the feet don't share, does change it.</summary>
+    [GameDataFact]
+    public void KeepingTheFeetLeavesG6AsRecordAsItWas()
+    {
+        var g = f.Install;
+        var slot = g.FindClip("fm_std_V0_idle_cool_01")!;
+        var src = g.FindClip("mcm_ar_fm_std_wade_low_V0_01")!;
+        var fit = new FitOptions { Mode = FitMode.Cut, CutStart = 674, Loop = true, LoopFrames = 30 };
+        byte[] Make(FitOptions o) => ClipReplace.FromClip(g.Skeleton, g.SharedTable, slot, src, o).Record;
+        Assert.Equal(Make(fit with { KeepFeet = false }), Make(fit));
+        var m = Motion.FromClip(g.Skeleton, src.Record!, g.SharedTable);
+        // the wade clip's first frame stands the right foot elsewhere: lined up on it, the kept feet step where the plain blend slides
+        var pose = Enumerable.Range(0, g.Skeleton.Bones.Count).Select(b => m.Local(0, b)).ToArray();
+        Assert.NotEqual(Make(fit with { SharedPose = pose, KeepFeet = false }), Make(fit with { SharedPose = pose }));
     }
 
     [GameDataFact]

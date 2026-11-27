@@ -203,7 +203,9 @@ static partial class FolderGuard
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return null; }   // the form guard says why
         for (string? d = full; d is not null; d = Path.GetDirectoryName(d))
         {
-            if (UnpackName(Path.GetFileName(d)))
+            // a package's own copy of a datafile's folder (its files for another datafile than the animation one, and their originals):
+            // right inside a folder carrying this tool's build marker, or inside that build's originals folder
+            if (UnpackName(Path.GetFileName(d)) && !InPackage(d))
                 return $"{d} is named as an unpacked datafile's folder (number_-_name.data); {UnpackedDatafileAdvice}";
             if (!OperatingSystem.IsWindows() || !Directory.Exists(d)) continue;
             // fail closed, with the reason alone: it isn't known to be an unpack
@@ -213,7 +215,7 @@ static partial class FolderGuard
             // the whole path it leads to, not only its last name: a link to a folder inside an unpack leads into the unpack
             string there = Canonical(f);
             for (string? t = there; t is not null; t = Path.GetDirectoryName(t))
-                if (UnpackName(Path.GetFileName(t)))
+                if (UnpackName(Path.GetFileName(t)) && !InPackage(t))
                     return $"{d} leads to {there}{(t == there ? "," : $", inside {t},")} named as an unpacked datafile's folder (number_-_name.data); {UnpackedDatafileAdvice}";
         }
         string? folder = file || File.Exists(full) ? Path.GetDirectoryName(full) : full;
@@ -316,6 +318,20 @@ static partial class FolderGuard
         for (string? t = there; t is not null; t = Path.GetDirectoryName(t))
             if (Build(t)) return $"{deepest} leads to {there}{(t.Equals(there, StringComparison.OrdinalIgnoreCase) ? "," : $", inside {t},")} {What}";
         return null;
+    }
+
+    /// <summary>Whether <paramref name="d"/> (a folder named as a datafile's) is a package's own: the folder above it carries this tool's
+    /// build marker, or is the originals folder of one that does. A folder of the game's unpack has neither above it.</summary>
+    static bool InPackage(string d)
+    {
+        string? up = Path.GetDirectoryName(d);
+        if (up is null) return false;
+        // never within an unpack's own tree (Extracted\<forge file>\Extracted\...), whatever a marker file there says
+        for (string? a = up; a is not null; a = Path.GetDirectoryName(a))
+            if (Path.GetFileName(a).EndsWith(".forge", StringComparison.OrdinalIgnoreCase)) return false;
+        if (Package.PackageBuild.IsEarlierBuild(up)) return true;
+        return string.Equals(Path.GetFileName(up), Package.PackageBuild.OriginalsFolderName, StringComparison.OrdinalIgnoreCase)
+            && Path.GetDirectoryName(up) is { } top && Package.PackageBuild.IsEarlierBuild(top);
     }
 
     /// <summary>Whether a folder name is of the form unpacking gives a datafile's folder, <c>digits_-_name.data</c>, case ignored as

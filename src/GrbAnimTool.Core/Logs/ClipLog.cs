@@ -68,7 +68,7 @@ public sealed class ClipLogLine
         ClipLogKind.Start => Lookup switch
         {
             ClipLookup.Found => Clip!.Name,
-            ClipLookup.NotFound => OtherName is { } other ? $"{other} (another datafile)" : UnknownText,
+            ClipLookup.NotFound => OtherName is { } other ? $"{other} (not listed)" : UnknownText,
             _ => "(no game folder open)",
         },
         _ => "",
@@ -90,10 +90,10 @@ public sealed class ClipLogLine
             + (SourceDetail is { } at ? $" (at {at} in the game's code)" : "") + ". "
             + Lookup switch
             {
-                ClipLookup.Found => $"Clip {Clip!.Name} (record {Clip.Index} of the animation datafile). Click to show it in the Library.",
+                ClipLookup.Found => $"Clip {Clip!.Name} (record {Clip.Index} of {(Clip.InAnimationDatafile || Clip.DatafileName.Length == 0 ? "the animation datafile" : $"the datafile {Clip.DatafileIndex}_-_{Clip.DatafileName}")}). Click to show it in the Library.",
                 ClipLookup.NotFound => OtherName is { } other
-                    ? $"Clip {other}, in another datafile than the animation one: the tool names it, but doesn't list or edit it."
-                    : "Not one of the clips of the game folder open: the tool doesn't name it.",
+                    ? $"Clip {other}: its name is in the game's files, but its datafile wasn't read into the Library's list, so a click can't show it."
+                    : "Not one of the clips of the game folder open, so the Library doesn't list it and a click can't show it; the tool doesn't guess a name.",
                 _ => "Open the game folder in the Library to name the clip.",
             },
         ClipLogKind.Unreadable => $"Line {Number} doesn't read: {Problem}. The line: {Text}",

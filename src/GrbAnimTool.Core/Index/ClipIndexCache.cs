@@ -73,9 +73,8 @@ public sealed class ClipIndexCache(string folder)
     public const string Magic = "GRB Anim Tool clip index cache";
     public const int FileFormat = 1;
 
-    /// <summary>The user's own folder for the cache: <c>%APPDATA%\GrbAnimTool\index</c>.</summary>
-    public static string DefaultFolder =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrbAnimTool", "index");
+    /// <summary>The user's own folder for the cache: <c>%APPDATA%\GrbAnimTool\index</c> (<see cref="Library.ToolData"/>).</summary>
+    public static string DefaultFolder => Path.Combine(Library.ToolData.Folder, "index");
 
     public string Folder { get; } = Path.GetFullPath(folder);
 

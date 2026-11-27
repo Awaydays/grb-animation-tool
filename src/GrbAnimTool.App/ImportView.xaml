@@ -160,7 +160,10 @@
             <!-- the checks and what to do with the result -->
             <DockPanel Grid.Column="4" Margin="6,0,0,0">
                 <StackPanel x:Name="ChecksHead" DockPanel.Dock="Top">
-                    <TextBlock Text="Checks" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,4" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock Text="Checks" FontWeight="SemiBold" FontSize="14" />
+                        <local:HelpButton x:Name="ChecksHelp" Heading="Checks" Text="{x:Static lib:HelpTexts.Checks}" />
+                    </StackPanel>
                     <TextBlock x:Name="VerdictText" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,4" Text="Nothing imported yet." />
                 </StackPanel>
                 <StackPanel x:Name="ActionPanel" DockPanel.Dock="Bottom" Margin="0,6,0,0">
@@ -190,6 +193,7 @@
                                 <Border DockPanel.Dock="Left" Style="{StaticResource Badge}" Margin="0,0,6,0" VerticalAlignment="Top">
                                     <TextBlock Text="{Binding Word}" Style="{StaticResource BadgeWord}" />
                                 </Border>
+                                <local:HelpButton DockPanel.Dock="Right" VerticalAlignment="Top" Heading="Feet slide" Text="{Binding Help, Mode=OneWay}" Visibility="{Binding HelpShown, Mode=OneWay}" />
                                 <TextBlock TextWrapping="Wrap">
                                     <Run Text="{Binding Check, Mode=OneWay}" FontWeight="SemiBold" /><Run Text=": " /><Run Text="{Binding Text, Mode=OneWay}" />
                                 </TextBlock>

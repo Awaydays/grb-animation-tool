@@ -53,6 +53,35 @@
                     <ComboBox x:Name="WhatBox" Width="226" SelectionChanged="OnFilterChanged" Margin="0,0,6,2" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
                               ToolTip="What the clip is, by the clip index (ready a moment after the game folder opens). Uncategorised: nothing places it." />
                 </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,6,0">
+                    <TextBlock Text="Set" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,4,0" />
+                    <ComboBox x:Name="SetBox" Width="150" SelectionChanged="OnFilterChanged" Margin="0,0,0,2" IsEnabled="False" ToolTipService.ShowOnDisabled="True"
+                              ToolTip="Whether the clip is in a set the game picks from, and which kind (ready once the sets are worked out)">
+                        <ComboBoxItem Content="All" IsSelected="True" />
+                        <ComboBoxItem Content="In a set" />
+                        <ComboBoxItem Content="Not in a set" />
+                        <ComboBoxItem Content="Random/cycle" />
+                        <ComboBoxItem Content="Blended" />
+                        <ComboBoxItem Content="Probable" />
+                    </ComboBox>
+                    <local:HelpButton x:Name="SetFilterHelp" Heading="Set" Text="{x:Static lib:HelpTexts.SetFilter}" />
+                </StackPanel>
+                <StackPanel x:Name="DatafileRow" Orientation="Horizontal" Margin="0,0,6,0">
+                    <TextBlock Text="Datafile" Style="{StaticResource Label}" VerticalAlignment="Center" Margin="4,0,4,0" />
+                    <!-- some 2,000 datafiles: typed words narrow the list (the three fixed choices stay at its top); the open list
+                         realises the rows in sight only -->
+                    <ComboBox x:Name="DatafileBox" Width="200" IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                              SelectionChanged="OnDatafileChosen" DropDownClosed="OnDatafileDone" Margin="0,0,0,2"
+                              VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True"
+                              ToolTip="The game file the clip's record is in: type part of a datafile's name to find it">
+                        <ComboBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <VirtualizingStackPanel />
+                            </ItemsPanelTemplate>
+                        </ComboBox.ItemsPanel>
+                    </ComboBox>
+                    <local:HelpButton x:Name="DatafileHelp" Heading="Datafile" Text="{x:Static lib:HelpTexts.DatafileFilter}" />
+                </StackPanel>
                 <!-- every row that isn't the game's own: a 1_-_ file of the unpacked folder, or a record changed inside the game's files -->
                 <StackPanel x:Name="ModdedRow" Orientation="Horizontal" Margin="0,0,6,2">
                     <CheckBox x:Name="ModdedBox" Content="Modded only" VerticalAlignment="Center" Checked="OnFilterChanged" Unchecked="OnFilterChanged"
@@ -63,6 +92,16 @@
                 <ContentPresenter x:Name="ExtraFilterHost" VerticalAlignment="Center" Margin="0,0,6,2" />
             </WrapPanel>
         </Grid>
+        <!-- a set shown on its own (the Library's Show the set): the search and the filters give way to it until it is left -->
+        <Border x:Name="SetBar" DockPanel.Dock="Top" Visibility="Collapsed" Margin="0,0,0,4" Padding="6,3" CornerRadius="3"
+                BorderThickness="1" BorderBrush="{DynamicResource Grb.Accent}">
+            <WrapPanel>
+                <TextBlock x:Name="SetBarText" VerticalAlignment="Center" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="  ·  " VerticalAlignment="Center" />
+                <Button x:Name="SetBarButton" Content="Show every clip" Click="OnSetBarLeave" Padding="6,1"
+                        ToolTip="Leaves the set: the search and the filters come back as they were" />
+            </WrapPanel>
+        </Border>
         <TextBlock x:Name="CountText" DockPanel.Dock="Bottom" Foreground="{DynamicResource Grb.TextSecondary}" Margin="0,4,0,0" TextWrapping="Wrap" />
         <!-- the bottom padding keeps the last row clear of the theme's horizontal scroll bar, which lies over the list's foot -->
         <ListView x:Name="List" SelectionMode="Single" SelectionChanged="OnSelected" Padding="0,0,0,12"
@@ -88,6 +127,9 @@
                     </GridViewColumn>
                     <GridViewColumn Width="100" DisplayMemberBinding="{Binding StatusText}">
                         <GridViewColumnHeader Content="Status" Tag="Status" ToolTip="Vanilla: the game's own clip; Replaced: another clip is installed in its place; Added: not one of the game's clips; Modded: a file of the unpacked folder named 1_-_... that replaces the game's own, listed beside it (Modded (vanilla): such a file that is the game's own byte for byte)" />
+                    </GridViewColumn>
+                    <GridViewColumn Width="150" DisplayMemberBinding="{Binding DatafileName}">
+                        <GridViewColumnHeader Content="Datafile" Tag="Datafile" ToolTip="The game file the clip's record is in (most player clips are in the animation datafile, MIS_Y2E4_Katya_Maksimov)" />
                     </GridViewColumn>
                 </GridView>
             </ListView.View>

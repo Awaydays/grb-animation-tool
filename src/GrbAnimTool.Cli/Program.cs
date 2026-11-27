@@ -14,8 +14,9 @@ namespace GrbAnimTool.Cli;
 static partial class Program
 {
     const string Usage = """
-        grbanim-cli check <gameFolder> [--forge <patchForge>]
-            Opens the game folder: finds the forge, checks the Oodle DLL's pin, loads the animation datafile, prints counts and the census.
+        grbanim-cli check <gameFolder> [--forge <patchForge>] [--datafile-cache <folder>]
+            Opens the game folder: finds the forge, checks the Oodle DLL's pin, loads the animation datafile and the other datafiles' lists
+            (through their cache in --datafile-cache, as the screens read them), prints counts, the times and the census.
         grbanim-cli list <gameFolder> [--forge <patchForge>] [--search <text>] [--armed | --unarmed]
             Lists the clips (index, ID, length, ticks, tracks, status, armed, name) whose name or hex ID matches the search, as the viewer's
             search does (typos forgiven), best match first; in index order without a search. Armed: the clip holds a hand track (an IK
@@ -23,8 +24,9 @@ static partial class Program
         grbanim-cli soak <gameFolder> --forge <patchForge> --passes <n> --log <file> [--minutes <m>] [--decode-datafile-each-pass]
             Repeats the full decode pass in one process and logs each pass (the log is capped). With --decode-datafile-each-pass, each pass
             first decodes the animation datafile again through the Oodle library already loaded.
-        grbanim-cli hash-table <vanillaForge> --game <gameFolder> --out <file>
-            Writes the table of SHA-256 hashes of every clip record of a vanilla forge's animation datafile.
+        grbanim-cli hash-table <vanillaForge> --game <gameFolder> --out <file> [--skeletons <file>]
+            Writes the table of SHA-256 hashes of every clip record of a vanilla forge's datafiles (the animation datafile and every other
+            one holding clips); with --skeletons, also the table of each clip's own skeleton (the clips not on the human body).
         grbanim-cli graph <gameFolder> [--forge <patchForge>] [--clip <name or hex ID>]
             Reads the animation graph: with --clip, every graph place naming that clip and the edits it allows; without, the summary.
         grbanim-cli export <gameFolder> [--forge <patchForge>] --clip <name|hexId> --out <folder>
@@ -52,9 +54,21 @@ static partial class Program
             written) or, rarely, when the files were written but something after it failed: an old file they replaced (with --overwrite)
             couldn't be deleted, or the reports in --report couldn't be written (the message says which).
         grbanim-cli replace <gameFolder> [--forge <patchForge>] --clip <name | 0xID> (--source <clip> | --glb <file>) --out <folder>
-                [--fit cut|speed|hold] [--start <frame>] [--loop <frames>] [--root-scale <x>] [--report <folder>] [--overwrite]
+                [--fit cut|speed|hold] [--start <frame>] [--loop <frames>] [--root-scale <x>] [--keep-feet on|off] [--report <folder>] [--overwrite]
             Puts another clip's motion, or a .glb's, on the clip, fitted to its exact length (a cut from --start, or from the start where
-            the loop closes best), keeping the clip's events and non-bone tracks; writes the record file and its check report as import does.
+            the loop and the feet match best), keeping the clip's events and non-bone tracks; writes the record file and its check report
+            as import does. --keep-feet off lets the loop's blend move planted feet (on: the legs are bent to them).
+        grbanim-cli sets <gameFolder> [--forge <patchForge>] [--clip <name | 0xID>]
+            The sets of clips the game chooses between or cycles through in one place, read from the graph (or grouped by name: a
+            probable set), with each set's blend; with --clip, the sets that clip is in.
+        grbanim-cli replace-set <gameFolder> [--forge <patchForge>] (--set <clip> | --clips <a,b,...>) (--source <clip> | --glb <file>) --out <folder>
+                [--fit cut|speed|hold] [--loop <frames>] [--root-scale <x>] [--same-piece] [--no-line-up] [--starts <a,b,...>]
+                [--keep-feet on|off] [--blend-ticks <n>] [--pose-frame <frame>] [--report <folder>] [--overwrite]
+            Replace for a set: the clip's set (--set) or the clips named, each fitted to its own length, each its own piece of the source
+            (unless --same-piece, and always one piece for a blended set), the pieces sharing as little source as their lengths allow, lined
+            up on the pose closest to them all so the switches don't jump (unless --no-line-up); --starts gives each clip's cut start in
+            order ("-" to suggest one); --pose-frame lines the set up on that frame of the source instead. Prints each seam's pose
+            distance and each clip's feet slide, the switches played with the set's blend (the graph's, or --blend-ticks, else 18 ticks).
         grbanim-cli compare <gameFolder> [--forge <patchForge>] --clip <name | 0xID> --record-file <file> [--top <n>]
             Reads a record file back and compares it with the game folder's own clip: per bone, its own rotation and its place in the
             clip's world at their worst tick, the bones that differ most first, then the mover.
@@ -97,13 +111,16 @@ static partial class Program
             // refused before any work
             string[]? reads = args[0] switch
             {
-                "check" or "rebuild-check" => ["forge"],
+                "check" => ["forge", "datafile-cache"],
+                "rebuild-check" => ["forge"],
                 "list" => ["forge", "search", "armed", "unarmed"],
                 "import" => ["forge", "glb", "clip", "out", "report", "overwrite", "allow-unchanged"],
-                "replace" => ["forge", "clip", "source", "glb", "fit", "start", "loop", "root-scale", "out", "report", "overwrite"],
+                "replace" => ["forge", "clip", "source", "glb", "fit", "start", "loop", "root-scale", "keep-feet", "out", "report", "overwrite"],
+                "replace-set" => ["forge", "set", "clips", "source", "glb", "fit", "loop", "root-scale", "same-piece", "no-line-up", "starts", "keep-feet", "blend-ticks", "pose-frame", "out", "report", "overwrite"],
+                "sets" => ["forge", "clip"],
                 "compare" => ["forge", "clip", "record-file", "top"],
                 "soak" => ["forge", "rebuild", "passes", "log", "minutes", "decode-datafile-each-pass"],
-                "hash-table" => ["game", "out"],
+                "hash-table" => ["game", "out", "skeletons"],
                 "graph" => ["forge", "clip"],
                 "export" => ["forge", "clip", "out"],
                 "export-skeleton" => ["forge", "out", "name", "fault"],
@@ -118,15 +135,17 @@ static partial class Program
                 return Fail($"error: {args[0]} takes no option --{unknown}");
             return args[0] switch
             {
-                "check" when pos.Count == 1 => Check(pos[0], opts.GetValueOrDefault("forge")),
+                "check" when pos.Count == 1 => Check(pos[0], opts.GetValueOrDefault("forge"), opts.GetValueOrDefault("datafile-cache")),
                 "list" when pos.Count == 1 => List(pos[0], opts.GetValueOrDefault("forge"), opts.GetValueOrDefault("search") ?? "",
                     opts.ContainsKey("armed") ? true : opts.ContainsKey("unarmed") ? false : null),
                 "import" when pos.Count == 1 => Import(pos[0], opts),
                 "replace" when pos.Count == 1 => Replace(pos[0], opts),
+                "replace-set" when pos.Count == 1 => ReplaceSet(pos[0], opts),
+                "sets" when pos.Count == 1 => Sets(pos[0], opts),
                 "compare" when pos.Count == 1 => Compare(pos[0], opts),
                 "soak" when pos.Count == 1 && opts.ContainsKey("rebuild") => SoakRebuild(pos[0], opts),
                 "soak" when pos.Count == 1 => Soak(pos[0], opts),
-                "hash-table" when pos.Count == 1 => HashTable(pos[0], Need(opts, "game"), Need(opts, "out")),
+                "hash-table" when pos.Count == 1 => HashTable(pos[0], Need(opts, "game"), Need(opts, "out"), opts.GetValueOrDefault("skeletons")),
                 "graph" when pos.Count == 1 => Graph(pos[0], opts.GetValueOrDefault("forge"), opts.GetValueOrDefault("clip")),
                 "export" when pos.Count == 1 => Export(pos[0], opts.GetValueOrDefault("forge"), Need(opts, "clip"), Need(opts, "out")),
                 "export-skeleton" when pos.Count == 1 => ExportSkeleton(pos[0], opts),
@@ -184,16 +203,17 @@ static partial class Program
         {
             if (!a[i].StartsWith("--", StringComparison.Ordinal)) { positional.Add(a[i]); continue; }
             string k = a[i][2..];
-            if (k is "decode-datafile-each-pass" or "rebuild" or "reencode" or "overwrite" or "armed" or "unarmed" or "allow-unchanged" or "wide-speeds") { d[k] = "1"; continue; }
+            if (k is "decode-datafile-each-pass" or "rebuild" or "reencode" or "overwrite" or "armed" or "unarmed" or "allow-unchanged" or "wide-speeds"
+                or "same-piece" or "no-line-up") { d[k] = "1"; continue; }
             if (i + 1 >= a.Length) throw new ArgumentException($"--{k} needs a value");
             d[k] = a[++i];
         }
         return d;
     }
 
-    static int Check(string game, string? forge)
+    static int Check(string game, string? forge, string? datafileCache)
     {
-        using var g = GameInstall.Open(game, forge);
+        using var g = GameInstall.Open(game, forge, datafileCache: datafileCache);
         var t = g.Timings;
         Console.WriteLine($"forge: {g.PatchForgePath}");
         Console.WriteLine($"Oodle: {g.Oodle.DllPath}, SHA-256 {g.Oodle.Sha256} (pinned), "
@@ -205,7 +225,17 @@ static partial class Program
         foreach (var c in g.Clips.Where(c => c.Status is ClipStatus.Replaced or ClipStatus.Added).Take(40))
             Console.WriteLine($"   {c.Status}: {c.Index}_-_{c.Name} 0x{c.Id:X16}");
         Console.WriteLine($"skeleton: body {g.BodySkeleton.Bones.Count} bones, add-on {g.AddOnSkeleton.Bones.Count}, merged {g.Skeleton.Bones.Count}; named {g.Skeleton.Bones.Count(b => g.Names.NameOf(b.Hash) is not null)}");
-        Console.WriteLine($"opening took {t.Total.TotalSeconds:F2} s (Oodle {t.Oodle.TotalSeconds:F2}, forge index {t.ForgeIndex.TotalSeconds:F2}, datafile {t.AnimationDatafile.TotalSeconds:F2}, shared table {t.SharedTable.TotalSeconds:F2}, skeletons {t.Skeletons.TotalSeconds:F2}, clips {t.Clips.TotalSeconds:F2})");
+        if (g.Others is { } od)
+        {
+            Console.WriteLine($"other datafiles: {od.Datafiles.Count} hold clips ({od.Datafiles.Count(d => !d.InPatch)} of the base forge's), of {od.Entries} entries looked at; "
+                + $"{g.OtherClips.Count(c => !c.FromFile)} clips (one row a clip ID; {od.Datafiles.Sum(d => d.Clips.Count)} records), {g.OtherClips.Count(c => c.FromFile)} unpacked files' rows; "
+                + $"decoded {od.Decoded}; not datafiles the tool reads: {od.Unreadable.Count}; cache: {(datafileCache is null ? "none" : od.Outcome.ToString())}{(od.CacheError is { } ce ? $" (not written: {ce})" : "")}; read in {od.Time.TotalSeconds:F2} s");
+            foreach (var u in od.Unreadable.Take(10)) Console.WriteLine($"   not read: {u}");
+            var sk = g.OtherClips.Where(c => !c.FromFile).GroupBy(c => c.OnSkeleton.Kind).Select(x => $"{x.Key} {x.Count()}");
+            Console.WriteLine($"   their skeletons: {string.Join(", ", sk)}; status: {string.Join(", ", g.OtherClips.GroupBy(c => c.Status).Select(x => $"{x.Key} {x.Count()}"))}");
+            foreach (var e in g.OtherUnpackedErrors) Console.WriteLine($"   {e}");
+        }
+        Console.WriteLine($"opening took {t.Total.TotalSeconds:F2} s (Oodle {t.Oodle.TotalSeconds:F2}, forge index {t.ForgeIndex.TotalSeconds:F2}, datafile {t.AnimationDatafile.TotalSeconds:F2}, shared table {t.SharedTable.TotalSeconds:F2}, skeletons {t.Skeletons.TotalSeconds:F2}, other datafiles {t.OtherDatafiles.TotalSeconds:F2}, clips {t.Clips.TotalSeconds:F2})");
         var census = ClipCensus.Run(g);
         foreach (var l in census.Lines()) Console.WriteLine(l);
         GC.Collect();
@@ -218,24 +248,36 @@ static partial class Program
     {
         using var g = GameInstall.Open(game, forge);
         static bool Armed(ClipEntry c) => c.Record is { } r && Core.Checks.HandTracks.IsArmed(r.Tracks);
-        var rows = new Core.Library.ClipQuery { Text = search }.Apply(g.Clips, Core.Library.ClipSort.Relevance).Where(c => armed is null || Armed(c) == armed).ToList();
+        var rows = new Core.Library.ClipQuery { Text = search }.Apply(g.AllClips, Core.Library.ClipSort.Relevance).Where(c => armed is null || Armed(c) == armed).ToList();
         foreach (var c in rows)
             Console.WriteLine(FormattableString.Invariant($"{c.Index,6} 0x{c.Id:X16} {c.Duration,8:F3} s {c.LastTick,6} {c.TrackCount,4} {c.Status,-8} {(Armed(c) ? "armed" : "-"),-5} {c.Name}")
-                + (Armed(c) ? "  hand tracks " + string.Join(" ", Core.Checks.HandTracks.In(c.Record!.Tracks).Select(h => h.ToString("X8"))) : ""));
-        Console.WriteLine($"{rows.Count} of {g.Clips.Count} clips");
+                + (Armed(c) ? "  hand tracks " + string.Join(" ", Core.Checks.HandTracks.In(c.Record!.Tracks).Select(h => h.ToString("X8"))) : "")
+                + (c.InAnimationDatafile ? "" : $"  in {c.DatafileIndex}_-_{c.DatafileName}{string.Concat(c.AlsoIn.Select(p => $", {p.Index}_-_{p.Name}"))}; on {g.SkeletonName(c.OnSkeleton)}"));
+        Console.WriteLine($"{rows.Count} of {g.AllClips.Count} clips");
         return 0;
     }
 
-    static int HashTable(string forge, string game, string outFile)
+    static int HashTable(string forge, string game, string outFile, string? skeletons)
     {
         var protect = ClipExport.ProtectedFolders(game, forge);
         // with no install open, the guard's content rule runs on the table of the game's clips built into the tool
         ClipExport.Guard(outFile, protect);
-        using var oodle = OodleLibrary.Load(game);
-        var (e, recs) = GameInstall.ReadAnimationDatafile(forge, oodle);
-        var list = recs.Where(r => r.Type == Core.Clips.ClipRecord.Type).Select(r => (r.Id, SHA256.HashData(r.Bytes.Span))).ToList();
+        using var g = GameInstall.Open(game, forge, "");
+        var list = g.Records.Where(r => r.Type == Core.Clips.ClipRecord.Type).Select(r => (r.Id, SHA256.HashData(r.Bytes.Span))).ToList();
+        int katya = list.Count;
+        // every other datafile's clips too: by ID and record hash, a clip in several datafiles once a hash
+        foreach (var d in g.Others!.Datafiles)
+            foreach (var r in OtherDatafiles.ReadRecords(d.InPatch ? g.PatchForgePath : g.BaseForgePath, d, g.Oodle).Where(r => r.Type == Core.Clips.ClipRecord.Type))
+                list.Add((r.Id, SHA256.HashData(r.Bytes.Span)));
         ClipExport.WriteFile(outFile, protect, fs => VanillaClipHashes.Write(fs, list));
-        Console.WriteLine($"{forge}: datafile index {e.Index}, {recs.Count} records, {list.Count} clips; wrote {new FileInfo(outFile).Length} B to {outFile}");
+        Console.WriteLine($"{forge}: the animation datafile index {g.AnimationDatafileIndex}, {katya} clips; {g.Others.Datafiles.Count} other datafiles, {list.Count - katya} clip records; "
+            + $"{list.Select(x => x.Id).Distinct().Count()} clip IDs; wrote {new FileInfo(outFile).Length} B to {outFile}");
+        if (skeletons is not null)
+        {
+            var rows = g.ClipSkeletonTable();
+            ClipExport.WriteFile(skeletons, protect, fs => { using var w = new StreamWriter(fs, new System.Text.UTF8Encoding(false)); Core.Skeletons.ClipSkeletons.Write(w, rows); });
+            Console.WriteLine($"the clips not on the body with a skeleton of their own: {rows.Count}; wrote {skeletons}");
+        }
         return 0;
     }
 
@@ -284,7 +326,7 @@ static partial class Program
     }
 
     static ClipEntry FindClip(GameInstall g, string clip) =>
-        Core.Library.ClipQuery.Find(g.Clips, clip) ?? throw new ArgumentException($"no clip named or with the ID '{clip}' in this game folder");
+        Core.Library.ClipQuery.Find(g.AllClips, clip) ?? throw new ArgumentException($"no clip named or with the ID '{clip}' in this game folder");
 
     static int Export(string game, string? forge, string clip, string outDir)
     {

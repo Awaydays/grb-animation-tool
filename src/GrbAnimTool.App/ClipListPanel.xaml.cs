@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
+using GrbAnimTool.Core.Graph;
 using GrbAnimTool.Core.Index;
 using GrbAnimTool.Core.Install;
 using GrbAnimTool.Core.Library;
@@ -25,7 +26,7 @@ public partial class ClipListPanel : UserControl
 
     /// <summary>The four columns every clip list starts with, by their sort names, then the rest every list has.</summary>
     public static readonly IReadOnlyList<string> CommonColumns = ["Name", "ReadableName", "Who", "What"];
-    public static readonly IReadOnlyList<string> OtherColumns = ["Index", "Length", "Ticks", "Tracks", "Status"];
+    public static readonly IReadOnlyList<string> OtherColumns = ["Index", "Length", "Ticks", "Tracks", "Status", "Datafile"];
 
     IReadOnlyList<ClipEntry> _clips = [];
     ClipIndex? _index;
@@ -40,6 +41,14 @@ public partial class ClipListPanel : UserControl
     ClipEntry? _shown;
     Func<ClipEntry, bool>? _constraint;
     string? _constraintNote;
+    // the sets (the Set filter and the search of set names), once worked out
+    ClipSets? _sets;
+    // a set shown on its own (the set bar), and the search and filters it put aside
+    Func<ClipEntry, bool>? _pinned;
+    SavedFilters? _saved;
+
+    /// <summary>The search and the filters as they stood before a set was shown on its own.</summary>
+    sealed record SavedFilters(string Search, int Status, bool Modded, int Family, int Who, int What, string Min, string Max, int Set, DatafileChoice Datafile);
 
     /// <summary>The readable-name column's width: the Library, with no screen's own columns beside it, gives it more room
     /// (<see cref="LibraryReadableWidth"/>) than the shared lists can.</summary>
@@ -59,6 +68,9 @@ public partial class ClipListPanel : UserControl
         IndexColumns.Insert(List, readable: ReadableWidth, who: WhoWidth, what: WhatWidth);
         FillCategoryFilters();
         _searchDelay.Tick += (_, _) => { _searchDelay.Stop(); Apply(); };
+        // the box's text as its own property, so words typed narrow the list whether or not its template is laid out
+        System.ComponentModel.DependencyPropertyDescriptor.FromProperty(ComboBox.TextProperty, typeof(ComboBox)).AddValueChanged(DatafileBox, (_, _) => OnDatafileTyped());
+        DatafileBox.IsKeyboardFocusWithinChanged += (_, e) => { if (e.NewValue is false && !DatafileBox.IsDropDownOpen) ShowDatafileChoice(); };
         // a screen shown again (another tab chosen, then this one) lays its list out anew, scrolled to the top: it shows the clip shown again
         List.Loaded += (_, _) => { if (_shown is { } s && _rows.Contains(s)) List.ScrollIntoView(s); };
         // a row scrolled into view scrolls the list only, never the screen around it (a screen whose panes scroll in a short window)
@@ -77,13 +89,241 @@ public partial class ClipListPanel : UserControl
         _index = null;
         List.Tag = null;
         _shown = null;
+        _sets = null;
+        _pinned = null;
+        _saved = null;
+        SetBar.Visibility = Visibility.Collapsed;
         _filling = true;
         FamilyBox.Items.Clear();
         FamilyBox.Items.Add(new ComboBoxItem { Content = "All families", Tag = null, IsSelected = true });
         foreach (var (f, n) in ClipQuery.Families(_clips)) FamilyBox.Items.Add(new ComboBoxItem { Content = $"{f}  ({n:N0})", Tag = f });
+        SetBox.SelectedIndex = 0;
+        SetBox.IsEnabled = false;
+        FillDatafiles();
         _filling = false;
         FillCategoryFilters();
         Apply();
+    }
+
+    /// <summary>A choice of the Datafile filter: its words in the list, the datafile's own name (null for All and Every other datafile),
+    /// the clips it keeps (null: every clip), and whether it stays at the list's top whatever is typed.</summary>
+    internal sealed record DatafileChoice(string Label, string? Name, Func<ClipEntry, bool>? Keeps, bool Fixed)
+    {
+        public override string ToString() => Label;
+    }
+
+    static readonly DatafileChoice AllDatafiles = new("All datafiles", null, null, true);
+    DatafileChoice _datafile = AllDatafiles;
+    List<DatafileChoice> _datafileChoices = [AllDatafiles];
+    ListCollectionView? _datafileView;
+    // the words typed in the Datafile box, which narrow its list; null when the box shows the choice made
+    string? _datafileTyped;
+
+    static bool InDatafile(ClipEntry c, string name) => c.DatafileName == name || c.AlsoIn.Any(p => p.Name == name);
+
+    /// <summary>The Datafile filter: All, the animation datafile, Every other datafile, then each other datafile by name with its clip
+    /// count; the filter shown only when the clips come from more than one.</summary>
+    void FillDatafiles()
+    {
+        var choices = new List<DatafileChoice> { AllDatafiles };
+        // a clip counts in every datafile that holds it (its own, and those it is also in)
+        var files = _clips.SelectMany(c => c.AlsoIn.Select(p => (Name: p.Name, Main: false)).Prepend((Name: c.DatafileName, Main: c.InAnimationDatafile)))
+            .GroupBy(x => x.Name).Select(g => (Name: g.Key, Count: g.Count(), Main: g.First().Main))
+            .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        string? main = files.Where(f => f.Main).Select(f => f.Name).FirstOrDefault();
+        if (main is not null)
+        {
+            int others = _clips.Count(c => !InDatafile(c, main));
+            choices.Add(new DatafileChoice($"{main} (the animation datafile)  ({_clips.Count - others:N0})", main, c => InDatafile(c, main), true));
+            choices.Add(new DatafileChoice($"Every other datafile  ({others:N0})", null, c => !InDatafile(c, main), true));
+        }
+        foreach (var f in files.Where(f => f.Name != main)) choices.Add(new DatafileChoice($"{f.Name}  ({f.Count:N0})", f.Name, c => InDatafile(c, f.Name), false));
+        _datafileChoices = choices;
+        // a view of its own: the box's own item collection doesn't filter items added to it directly
+        _datafileView = new ListCollectionView(choices) { Filter = ShowsDatafileChoice };
+        DatafileBox.ItemsSource = _datafileView;
+        _datafile = AllDatafiles;
+        ShowDatafileChoice();
+        DatafileRow.Visibility = files.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Whether the Datafile box's list shows a choice: the fixed ones and the one made always; a datafile when every word typed
+    /// is in its name.</summary>
+    bool ShowsDatafileChoice(object o) => o is not DatafileChoice d || d.Fixed || ReferenceEquals(d, _datafile) || _datafileTyped is not { } t
+        || t.Split(' ', StringSplitOptions.RemoveEmptyEntries).All(w => d.Name!.Contains(w, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The Datafile box shows the choice made, its list whole again.</summary>
+    void ShowDatafileChoice()
+    {
+        bool was = _filling;
+        _filling = true;
+        _datafileTyped = null;
+        _datafileView?.Refresh();
+        DatafileBox.SelectedItem = _datafile;
+        DatafileBox.Text = _datafile.Label;
+        _filling = was;
+    }
+
+    /// <summary>Words typed in the Datafile box: its list narrows to the datafiles whose names hold them (the fixed choices stay), and opens
+    /// for the person typing.</summary>
+    void OnDatafileTyped()
+    {
+        if (_filling) return;
+        string t = DatafileBox.Text ?? "";
+        string? typed = t.Trim().Length == 0 || t == _datafile.Label || DatafileBox.SelectedItem is DatafileChoice d && d.Label == t ? null : t;
+        if (typed == _datafileTyped) return;
+        _datafileTyped = typed;
+        _datafileView?.Refresh();
+        // only a box the keyboard is in opens its list: never one of a test or a picture, which has no window on screen
+        if (typed is not null && DatafileBox.IsKeyboardFocusWithin && !DatafileBox.IsDropDownOpen)
+        {
+            DatafileBox.IsDropDownOpen = true;
+            // an editable box opening its list selects all its text, so the next key would replace what was typed: the caret back at
+            // the end, at once and once more before the next key is handled
+            KeepCaretAtEnd();
+            Dispatcher.BeginInvoke(KeepCaretAtEnd, DispatcherPriority.Normal);
+        }
+    }
+
+    void KeepCaretAtEnd()
+    {
+        if (DatafileBox.Template?.FindName("PART_EditableTextBox", DatafileBox) is TextBox t) t.Select(t.Text.Length, 0);
+    }
+
+    void OnDatafileChosen(object sender, SelectionChangedEventArgs e)
+    {
+        if (_filling || e.AddedItems.Count != 1 || e.AddedItems[0] is not DatafileChoice d || ReferenceEquals(d, _datafile)) return;
+        _datafile = d;
+        Apply();
+    }
+
+    /// <summary>The list closed (a choice made, or Escape), or the keyboard gone from the box with its list closed: it shows the choice
+    /// made again, its list whole (words typed but not chosen dropped).</summary>
+    void OnDatafileDone(object sender, EventArgs e) => ShowDatafileChoice();
+
+    /// <summary>Takes the install's sets (null: not worked out): the Set filter opens, and the search also finds a set's clips by its
+    /// state's name.</summary>
+    public void SetSets(ClipSets? sets)
+    {
+        _sets = sets;
+        SetBox.IsEnabled = sets is not null;
+        Apply();
+    }
+
+    /// <summary>Shows only the clips of <paramref name="ids"/> under a bar saying <paramref name="label"/>, the search and the filters put
+    /// aside (emptied) until the set is left (<see cref="LeaveSet"/>, or the bar's Show every clip), which brings them back.</summary>
+    public void ShowSetOnly(string label, IReadOnlyCollection<ulong> ids)
+    {
+        _saved ??= new SavedFilters(SearchBox.Text, StatusBox.SelectedIndex, ModdedBox.IsChecked == true, FamilyBox.SelectedIndex, WhoBox.SelectedIndex,
+            WhatBox.SelectedIndex, MinBox.Text, MaxBox.Text, SetBox.SelectedIndex, _datafile);
+        var set = ids.ToHashSet();
+        _pinned = c => set.Contains(c.Id);
+        _filling = true;
+        SearchBox.Text = "";
+        StatusBox.SelectedIndex = 0;
+        ModdedBox.IsChecked = false;
+        FamilyBox.SelectedIndex = 0;
+        WhoBox.SelectedIndex = WhatBox.SelectedIndex = 0;
+        MinBox.Text = MaxBox.Text = "";
+        SetBox.SelectedIndex = 0;
+        _datafile = AllDatafiles;
+        ShowDatafileChoice();
+        _filling = false;
+        SetBarText.Text = label;
+        SetBar.Visibility = Visibility.Visible;
+        Apply();
+    }
+
+    /// <summary>Whether a set is shown on its own (<see cref="ShowSetOnly"/>).</summary>
+    public bool ShowingSet => _pinned is not null;
+
+    /// <summary>The set bar's text (for tests).</summary>
+    internal string SetBarLabel => SetBar.Visibility == Visibility.Visible ? SetBarText.Text : "";
+
+    /// <summary>Raised when the set bar's Show every clip leaves the set.</summary>
+    public event Action? SetLeft;
+
+    /// <summary>Leaves the set shown on its own: every clip again, the search and the filters as they stood before.</summary>
+    public void LeaveSet()
+    {
+        if (_pinned is null) return;
+        _pinned = null;
+        SetBar.Visibility = Visibility.Collapsed;
+        if (_saved is { } s)
+        {
+            _filling = true;
+            SearchBox.Text = s.Search;
+            StatusBox.SelectedIndex = s.Status;
+            ModdedBox.IsChecked = s.Modded;
+            FamilyBox.SelectedIndex = Math.Min(s.Family, FamilyBox.Items.Count - 1);
+            WhoBox.SelectedIndex = Math.Min(s.Who, WhoBox.Items.Count - 1);
+            WhatBox.SelectedIndex = Math.Min(s.What, WhatBox.Items.Count - 1);
+            MinBox.Text = s.Min;
+            MaxBox.Text = s.Max;
+            SetBox.SelectedIndex = s.Set;
+            _datafile = s.Datafile;
+            ShowDatafileChoice();
+            _filling = false;
+        }
+        _saved = null;
+        Apply();
+    }
+
+    void OnSetBarLeave(object sender, RoutedEventArgs e)
+    {
+        LeaveSet();
+        SetLeft?.Invoke();
+    }
+
+    /// <summary>Whether a clip passes the Set filter as it stands (by every set it is in).</summary>
+    bool SetFilterKeeps(ClipEntry c)
+    {
+        if (_sets is not { } sets || SetBox.SelectedIndex <= 0) return true;
+        var of = sets.Of(c.Id);
+        return SetBox.SelectedIndex switch
+        {
+            1 => of.Count > 0,
+            2 => of.Count == 0,
+            3 => of.Any(s => s.Kind is ClipSetKind.Random or ClipSetKind.Sequence),
+            4 => of.Any(s => s.Kind == ClipSetKind.Blended),
+            5 => of.Any(s => s.Kind == ClipSetKind.Probable),
+            _ => true,
+        };
+    }
+
+    /// <summary>Whether every word of the search stands in the clip's set's state or machine names or in its datafile's name: the clips
+    /// the search finds by them, after the best matches by the clip's own fields.</summary>
+    bool FoundByPlace(ClipEntry c, string[] words)
+    {
+        string hay = c.DatafileName + " " + string.Join(" ", c.AlsoIn.Select(p => p.Name)) + " " + (_sets is { } s ? string.Join(" ", s.Of(c.Id).Select(x => x.Where)) : "");
+        return words.All(w => hay.Contains(w, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Lets Ctrl and Shift select several rows (the screen reads them from <see cref="SelectedClips"/>).</summary>
+    public bool MultiSelect
+    {
+        get => List.SelectionMode == SelectionMode.Extended;
+        set => List.SelectionMode = value ? SelectionMode.Extended : SelectionMode.Single;
+    }
+
+    /// <summary>The rows selected, in the list's order.</summary>
+    public IReadOnlyList<ClipEntry> SelectedClips
+    {
+        get
+        {
+            var sel = List.SelectedItems.OfType<ClipEntry>().ToHashSet();
+            return _rows.Where(sel.Contains).ToList();
+        }
+    }
+
+    /// <summary>Raised when the rows selected change by a click or a key (<see cref="SelectedClips"/>), after <see cref="Picked"/>.</summary>
+    public event Action<IReadOnlyList<ClipEntry>>? SelectionPicked;
+
+    /// <summary>Selects these rows together, as Ctrl-clicks would, in this order (the Edit screen taking the Library's selection; tests).</summary>
+    internal void SelectMany(IEnumerable<ClipEntry> clips)
+    {
+        List.SelectedItems.Clear();
+        foreach (var c in clips) if (_rows.Contains(c)) List.SelectedItems.Add(c);
     }
 
     /// <summary>Takes the clip set's clip index (null: none, or not ready): the readable name, who and what columns fill in on every row
@@ -187,7 +427,8 @@ public partial class ClipListPanel : UserControl
     sealed class BadgeShown(Func<ClipEntry, object?, string> word, string own) : IMultiValueConverter
     {
         public object Convert(object[] values, Type targetType, object? parameter, CultureInfo culture) =>
-            values.Length == 2 && values[0] is ClipEntry c && word(c, values[1] == DependencyProperty.UnsetValue ? null : values[1]) == own ? Visibility.Visible : Visibility.Collapsed;
+            values.Length == 2 && values[0] is ClipEntry c && word(c, values[1] == DependencyProperty.UnsetValue ? null : values[1]) is var s && (s == own || s == own + "*")
+                ? Visibility.Visible : Visibility.Collapsed;
 
         public object[] ConvertBack(object value, Type[] targetTypes, object? parameter, CultureInfo culture) => throw new NotSupportedException();
     }
@@ -219,7 +460,8 @@ public partial class ClipListPanel : UserControl
             badge.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
             badge.SetBinding(UIElement.VisibilityProperty, RowBinding(new BadgeShown(word, w)));
             var text = new FrameworkElementFactory(typeof(TextBlock));
-            text.SetValue(TextBlock.TextProperty, w);
+            // the word as the row gives it: the badge's own, or with a mark after it (the Package screen's * for big look differences)
+            text.SetBinding(TextBlock.TextProperty, RowBinding(new OwnCell(word)));
             text.SetResourceReference(TextBlock.ForegroundProperty, Theme.Key("BadgeText"));
             text.SetValue(TextBlock.FontSizeProperty, 10.0);
             text.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
@@ -284,10 +526,13 @@ public partial class ClipListPanel : UserControl
     public void Show(ClipEntry? c)
     {
         _shown = c;
+        int before = List.SelectedItems.Count;
         _filling = true;
-        if (c is not null && _rows.Contains(c)) { List.SelectedItem = c; List.ScrollIntoView(c); }
+        // a clip among several selected keeps the selection as it is
+        if (c is not null && _rows.Contains(c)) { if (!List.SelectedItems.Contains(c)) List.SelectedItem = c; List.ScrollIntoView(c); }
         else List.SelectedItem = null;
         _filling = false;
+        SelectionReset(before);
     }
 
     /// <summary>Selects the clip named <paramref name="clip"/> (by name or hex ID) as a click on its row would, clearing the search and
@@ -338,14 +583,41 @@ public partial class ClipListPanel : UserControl
     /// <summary>As <see cref="Apply()"/>; with <paramref name="keepPlace"/> (only the screen's constraint changed, as the Edit screen's marks
     /// arriving while the list is browsed) the row at the top of the list stays there, or, when the new rows leave it out, the first row
     /// after it that they hold, else the last before it.</summary>
+    /// <summary>Several rows were selected and the list's own change left fewer (a search, a filter, the screen showing one clip): the
+    /// screen is told, as by a click, so nothing goes on standing for rows the list no longer has selected.</summary>
+    void SelectionReset(int before)
+    {
+        if (before > 1 && List.SelectedItems.Count != before) SelectionPicked?.Invoke(SelectedClips);
+    }
+
     void Apply(bool keepPlace)
+    {
+        int selectedBefore = List.SelectedItems.Count;
+        try { ApplyRows(keepPlace); }
+        finally { SelectionReset(selectedBefore); }
+    }
+
+    void ApplyRows(bool keepPlace)
     {
         _searchDelay.Stop();
         var old = _rows;
         // a scroll still waiting for the layout (one asked for in this same turn) is where the list is
         if (keepPlace) Scroller()?.UpdateLayout();
         int topAt = keepPlace ? TopIndex() : -1;
-        IEnumerable<ClipEntry> rows = Query().Apply(_clips, _sort, _descending);
+        var query = Query();
+        IEnumerable<ClipEntry> rows = query.Apply(_clips, _sort, _descending);
+        // the search also finds clips by their set's state and their datafile's names, after the best matches by their own fields
+        var words = SearchBox.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (words.Length > 0)
+        {
+            var found = rows.ToList();
+            var have = found.ToHashSet();
+            found.AddRange((query with { Text = "" }).Apply(_clips, _sort, _descending).Where(c => !have.Contains(c) && FoundByPlace(c, words)));
+            rows = found;
+        }
+        var inDatafile = _datafile.Keeps;
+        rows = rows.Where(c => SetFilterKeeps(c) && (inDatafile is null || inDatafile(c)));
+        if (_pinned is { } pin) rows = rows.Where(pin);
         if (_constraint is { } keep) rows = rows.Where(keep);
         _rows = rows.ToList();
         _filling = true;
@@ -421,9 +693,27 @@ public partial class ClipListPanel : UserControl
         FamilyBox.SelectedIndex = 0;
         WhoBox.SelectedIndex = WhatBox.SelectedIndex = 0;
         MinBox.Text = MaxBox.Text = "";
+        SetBox.SelectedIndex = 0;
+        _datafile = AllDatafiles;
+        ShowDatafileChoice();
         _filling = false;
         Apply();
     }
+
+    /// <summary>For tests and pictures: the Set filter's choice (0 All, 1 In a set, 2 Not in a set, 3 Random/cycle, 4 Blended, 5
+    /// Probable) and the Datafile filter's (a datafile's name, null for all), the rows worked out at once.</summary>
+    internal void SetPlaceFilters(int set, string? datafile)
+    {
+        _filling = true;
+        SetBox.SelectedIndex = set;
+        _datafile = _datafileChoices.FirstOrDefault(d => datafile is not null && d.Name == datafile) ?? AllDatafiles;
+        ShowDatafileChoice();
+        _filling = false;
+        Apply();
+    }
+
+    /// <summary>The search box's text (for tests).</summary>
+    internal string SearchText { get => SearchBox.Text; set { SearchBox.Text = value; Apply(); } }
 
     /// <summary>For a picture: the search text and the category filters (null: all) set, the rows worked out at once. Returns an error
     /// message when a filter has no such category, or null.</summary>
@@ -472,8 +762,12 @@ public partial class ClipListPanel : UserControl
     void OnSelected(object sender, SelectionChangedEventArgs e)
     {
         if (_filling) return;
-        // the row picked is the one the list keeps selected and scrolls to from now on, until the screen shows another
-        if (List.SelectedItem is ClipEntry c) _shown = c;
-        Picked?.Invoke(List.SelectedItem as ClipEntry);
+        // the row picked is the one the list keeps selected and scrolls to from now on, until the screen shows another: the row last
+        // added to the selection, else the one shown while it stays selected, else the first selected
+        var now = e.AddedItems.OfType<ClipEntry>().LastOrDefault()
+            ?? (_shown is not null && List.SelectedItems.Contains(_shown) ? _shown : List.SelectedItem as ClipEntry);
+        if (now is not null) _shown = now;
+        Picked?.Invoke(now);
+        SelectionPicked?.Invoke(SelectedClips);
     }
 }

@@ -34,8 +34,8 @@ public sealed class PackageStore(string folder)
     public const int Version = 3;
     const int TextVersion = 2;
 
-    /// <summary>The user's own folder for the list: <c>%APPDATA%\GrbAnimTool\package</c>.</summary>
-    public static string DefaultFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrbAnimTool", "package");
+    /// <summary>The user's own folder for the list: <c>%APPDATA%\GrbAnimTool\package</c> (<see cref="ToolData"/>).</summary>
+    public static string DefaultFolder => Path.Combine(ToolData.Folder, "package");
 
     public string Folder { get; } = Path.GetFullPath(folder);
     public string FilePath => Path.Combine(Folder, FileName);
@@ -99,8 +99,9 @@ public sealed class PackageStore(string folder)
         // the row it was kept from: a modded file's row has the file's number for its index
         // after a repack that file's bytes are the forge's row, which keeps the file's number beside its own index
         static bool At(ClipEntry x, Item i) => x.Index == i.Index || x.FileNumber == i.Index;
-        slot = g.Clips.FirstOrDefault(x => x.Id == i.Id && x.Index == i.Index && x.Name == i.Name)
-            ?? g.Clips.FirstOrDefault(x => x.Id == i.Id && At(x, i) && x.Name == i.Name) ?? g.Clips.FirstOrDefault(x => x.Id == i.Id);
+        // every datafile's rows: a clip of another datafile kept last time is found again in its own
+        slot = g.AllClips.FirstOrDefault(x => x.Id == i.Id && x.Index == i.Index && x.Name == i.Name)
+            ?? g.AllClips.FirstOrDefault(x => x.Id == i.Id && At(x, i) && x.Name == i.Name) ?? g.AllClips.FirstOrDefault(x => x.Id == i.Id);
         if (slot is null) return "these game files have no clip of its ID";
         if (!At(slot, i) || slot.Name != i.Name) return $"these game files' clip of its ID is {slot.Index}_-_{slot.Name}, not {i.Index}_-_{i.Name}";
         try

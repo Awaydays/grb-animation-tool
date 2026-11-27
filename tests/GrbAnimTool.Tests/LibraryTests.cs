@@ -81,12 +81,18 @@ public sealed class LibraryTests
         Assert.Equal(3, new ClipQuery().Apply(rows).Count(c => !c.Modded && c.Status == ClipStatus.Vanilla));
     }
 
-    /// <summary>The help texts of 1.1.0, word for word.</summary>
+    /// <summary>The help texts, word for word.</summary>
     [Fact]
     public void TheHelpTextsAreTheOnesWritten()
     {
         Assert.Equal("Build makes a folder with your changed files (named 1_-_...) and a folder with the files they replace. Place the files like any "
-            + "other animation mod. To undo, delete the 1_-_ files and put the originals back.", HelpTexts.Package);
+            + "other animation mod. To undo, delete the 1_-_ files and put the originals back.\n"
+            + "Clips from other datafiles go in that datafile's own folder; the package shows where.", HelpTexts.Package);
+        Assert.Equal("How far a planted foot moves during the tool's blends and at the switches between clips. A sliding foot shows in game.", HelpTexts.FeetSlide);
+        Assert.Equal("Where this clip's piece starts in the source. Suggest spreads the pieces so they overlap as little as possible and the feet line up.", HelpTexts.PieceStart);
+        Assert.Equal("Clips the game switches between in one place. Blended: the game mixes them by a value such as aim angle.", HelpTexts.SetFilter);
+        Assert.Equal("The game keeps its animations in several files. Most player animations are in one of them; civilians and other characters have their own.", HelpTexts.DatafileFilter);
+        Assert.Equal("Every clip gets the same pose, so the game's blend between them (RT_AimAt_HorizontalAngle) does nothing.", HelpTexts.OneSourceOnBlended("RT_AimAt_HorizontalAngle"));
         Assert.Equal("Cut: uses part of the animation (only when it's longer than the clip). The suggested start is where the loop closes best.\n"
             + "Speed: stretches or squeezes it to fit. It will play faster or slower.\n"
             + "Hold: plays it at normal speed, then keeps the last pose until the clip's own length is over. You get control back only then.", HelpTexts.Fit);
@@ -94,6 +100,12 @@ public sealed class LibraryTests
             + "Works best for emotes, idles and poses. Moving, aiming and weapon animations may not line up with the game's own timing.", HelpTexts.Replace);
         Assert.Equal("Shows every file that isn't the game's own: Modded (a separate 1_-_ file) and Replaced (changed inside the game's files).", HelpTexts.Modded);
         Assert.EndsWith(HelpTexts.Replace, HelpTexts.QuickStart);
+        Assert.Equal("Game checks: whether the game can play it. A FAIL here stops it being added.\n"
+            + "Look checks: how different it looks from the game's own animation (floating, big joint angles, hands or feet in other places). "
+            + "The game still plays it; check whether that's what you want.", HelpTexts.Checks);
+        Assert.Equal("Clips the game switches between in one place, like the idles of one stance. Replace the whole set so they match.", HelpTexts.Set);
+        Assert.Equal("Blends the start and end of every clip toward the same pose, so the game's switches between them don't jump.", HelpTexts.LineUpSet);
+        Assert.Equal("Grouped by name; the tool couldn't read this set from the game's data. Check it in game.", HelpTexts.ProbableSet);
     }
 
     [Fact]

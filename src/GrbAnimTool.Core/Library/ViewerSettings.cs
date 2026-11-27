@@ -95,9 +95,8 @@ public sealed record ViewerSettings
         catch (JsonException) { return new(); }
     }
 
-    /// <summary>The settings file's usual place: %APPDATA%\GrbAnimTool\settings.json.</summary>
-    public static string DefaultPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrbAnimTool", "settings.json");
+    /// <summary>The settings file's usual place: %APPDATA%\GrbAnimTool\settings.json (<see cref="ToolData"/>).</summary>
+    public static string DefaultPath => Path.Combine(ToolData.Folder, "settings.json");
 
     /// <summary>The settings in <paramref name="path"/>; empty settings when the file is missing or can't be read.</summary>
     public static ViewerSettings Load(string path)

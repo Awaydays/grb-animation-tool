@@ -49,26 +49,30 @@ public static class ClipExport
     {
         var record = c.Record ?? throw new ExportException($"{c.Name} can't be exported: its record doesn't read ({c.ParseError}).");
         if (!record.WalkedToEnd) throw new ExportException($"{c.Name} can't be exported: {record.Stop}.");
+        // the clip on its own skeleton: the body's for the characters' clips, the game's own skeleton record for another one's
+        var s = g.SkeletonOf(c) ?? throw new ExportException($"{c.Name} can't be exported: its skeleton is {g.SkeletonName(c.OnSkeleton)}.");
         Guard(g, glbPath);
         string sidecar = SidecarPathFor(glbPath);
         Guard(g, sidecar);
         SampledClip sampled;
-        try { sampled = SampledClip.Of(g.Skeleton, record, g.SharedTable); }
+        try { sampled = SampledClip.Of(s, record, g.SharedTable); }
         catch (InvalidDataException ex) { throw new ExportException($"{c.Name} can't be exported: {ex.Message}", ex); }
-        var side = ClipSidecar.Of(record, g.SharedTable, g.Skeleton, g.Names, sampled, Path.GetFileName(glbPath), c.Index, c.Status);
-        Write(glbPath, GlbWriter.Clip(g.Skeleton, sampled, c.Name, fault), sidecar, new UTF8Encoding(false).GetBytes(side.ToJson()), ProtectedFolders(g));
-        return new ExportResult(Path.GetFullPath(glbPath), sidecar, Check(g, glbPath, record));
+        var side = ClipSidecar.Of(record, g.SharedTable, s, g.Names, sampled, Path.GetFileName(glbPath), c.Index, c.Status);
+        Write(glbPath, GlbWriter.Clip(s, sampled, c.Name, fault), sidecar, new UTF8Encoding(false).GetBytes(side.ToJson()), ProtectedFolders(g));
+        return new ExportResult(Path.GetFullPath(glbPath), sidecar, Check(g, s, glbPath, record));
     }
 
-    static RoundTripResult Check(GameInstall g, string glbPath, Clips.ClipRecord? record)
+    static RoundTripResult Check(GameInstall g, string glbPath, Clips.ClipRecord? record) => Check(g, g.Skeleton, glbPath, record);
+
+    static RoundTripResult Check(GameInstall g, Core.Skeletons.Skeleton s, string glbPath, Clips.ClipRecord? record)
     {
         GltfAnimation f;
         try { f = GltfAnimation.Read(glbPath); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {
-            return new RoundTripResult(0, g.Skeleton.Bones.Count, double.NaN, double.NaN, "", "", [$"the written file doesn't read back: {ex.Message}"]);
+            return new RoundTripResult(0, s.Bones.Count, double.NaN, double.NaN, "", "", [$"the written file doesn't read back: {ex.Message}"]);
         }
-        return RoundTrip.Compare(g.Skeleton, f, record, g.SharedTable);
+        return RoundTrip.Compare(s, f, record, g.SharedTable);
     }
 
     /// <summary>Refuses (with an <see cref="ExportException"/>) a path inside the install's protected folders

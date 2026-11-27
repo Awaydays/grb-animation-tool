@@ -1,4 +1,5 @@
 using GrbAnimTool.Core.Checks;
+using GrbAnimTool.Core.Clips;
 using GrbAnimTool.Core.Import;
 using GrbAnimTool.Core.Install;
 using GrbAnimTool.Core.Library;
@@ -71,15 +72,19 @@ public static class PackageEntries
     /// <summary>Every check of the kept report (<see cref="CheckResult.Line"/>'s lines read back: the level, the check's name, the message
     /// with where its worst fell, in the Edit screen's words), the failures first, then the warnings, then the passes, each in report order, as the Edit screen
     /// lists them.</summary>
-    public static List<CheckResult> Checks(PackageItem item)
+    public static List<CheckResult> Checks(PackageItem item) => [.. Read(item.ReportText).OrderByDescending(c => c.Rank)];
+
+    /// <summary>The report's lines read back, in report order: each line that starts with a level's word (<see cref="CheckResult.Words"/>),
+    /// its kind by its check's name. A report kept by an earlier version, a look check's line under FAIL or WARN, reads as a big difference
+    /// or a note, as the checks say now.</summary>
+    static List<CheckResult> Read(string reportText)
     {
         var l = new List<CheckResult>();
-        foreach (var raw in item.ReportText.Split('\n'))
+        foreach (var raw in reportText.Split('\n'))
         {
             string line = raw.TrimEnd('\r');
-            foreach (var level in new[] { CheckLevel.Pass, CheckLevel.Warn, CheckLevel.Fail })
+            foreach (var (w, level) in CheckResult.Words)
             {
-                string w = CheckResult.Word(level);
                 if (!line.StartsWith(w + " ", StringComparison.Ordinal)) continue;
                 string rest = line[w.Length..].TrimStart();
                 // where the worst fell, worded as the Edit screen words it: "(tick 7, Foot_L)", not the report's "(worst at tick 7, Foot_L)"
@@ -87,24 +92,66 @@ public static class PackageEntries
                 if (worst >= 0 && rest.EndsWith(')')) rest = rest[..worst] + " (" + rest[(worst + " (worst at ".Length)..];
                 int colon = rest.IndexOf(": ", StringComparison.Ordinal);
                 l.Add(colon < 0 ? new CheckResult("", level, rest) : new CheckResult(rest[..colon], level, rest[(colon + 2)..]));
+                break;
             }
         }
-        return [.. l.OrderByDescending(c => c.Level)];
+        return l;
     }
 
-    /// <summary>The report's lines at warn or fail, each "WARN name: message" with its level word, in report order.</summary>
+    /// <summary>The report's lines that aren't a pass or an OK, each "WARN name: message" with its word, in report order.</summary>
     public static List<string> Warnings(PackageItem item)
     {
         var l = new List<string>();
         foreach (var raw in item.ReportText.Split('\n'))
         {
             string line = raw.TrimEnd('\r');
-            foreach (var level in new[] { CheckLevel.Warn, CheckLevel.Fail })
-            {
-                string w = CheckResult.Word(level);
-                if (line.StartsWith(w + " ", StringComparison.Ordinal)) l.Add(w + " " + line[w.Length..].TrimStart());
-            }
+            if (CheckResult.Words.FirstOrDefault(x => line.StartsWith(x.Word + " ", StringComparison.Ordinal)) is not { Word: { } w } found || found.Level == CheckLevel.Pass) continue;
+            string rest = line[w.Length..].TrimStart();
+            // a look check's line in a report kept by an earlier version (under WARN or FAIL) in the words it has now
+            int colon = rest.IndexOf(": ", StringComparison.Ordinal);
+            string said = colon > 0 ? CheckResult.Word(found.Level, CheckResult.KindOf(rest[..colon])) : w;
+            l.Add(said + " " + rest);
         }
         return l;
     }
+
+    /// <summary>The item's verdict by its game checks, read from its report (so a report kept by an earlier version, whose verdict counted
+    /// look checks, is judged as the checks say now); the kept verdict when the report holds no check line.</summary>
+    public static CheckLevel GameVerdict(PackageItem item) => Read(item.ReportText) is { Count: > 0 } l ? CheckReport.VerdictOf(l) : item.Verdict;
+
+    /// <summary>Why a package of <paramref name="items"/> isn't built, by every row checked again at Build, whatever version of the tool
+    /// kept it: a row whose game checks failed (its report judged again, <see cref="GameVerdict"/>), or whose record no longer is a
+    /// record of its clip the game can play (it doesn't read to its end, or its ID, length or track list isn't the clip's). The first such
+    /// row is named; null when every row passes.</summary>
+    public static string? BuildRefusal(IReadOnlyList<PackageItem> items)
+    {
+        foreach (var i in items)
+        {
+            var slot = i.Slot;
+            if (GameVerdict(i) == CheckLevel.Fail)
+            {
+                var failed = Read(i.ReportText).FirstOrDefault(c => c.Kind == CheckKind.Game && c.Level == CheckLevel.Fail);
+                return $"{slot.Name} failed a game check{(failed is null ? "" : $" ({failed.Check}: {failed.Message})")}, so the package isn't built: remove it from the package, or make it again.";
+            }
+            ClipRecord r;
+            try { r = ClipRecord.Parse(i.Record); }
+            catch (InvalidDataException ex) { return $"{slot.Name}'s record in the package doesn't read ({ex.Message}), so the package isn't built: remove it from the package, or make it again."; }
+            string? why = !r.WalkedToEnd ? $"its curves don't read to the record's end ({r.Stop})"
+                : r.Id != slot.Id ? $"it is the record of clip 0x{r.Id:X16}, not of 0x{slot.Id:X16}"
+                : slot.Record is { } own && r.LastTick != own.LastTick ? $"it lasts {r.LastTick} ticks, the clip {own.LastTick}"
+                : slot.Record is { } own2 && !r.Tracks.SequenceEqual(own2.Tracks) ? "its track list isn't the clip's"
+                : null;
+            if (why is not null) return $"{slot.Name}'s record in the package fails the game checks again: {why}. The package isn't built: remove it from the package, or make it again.";
+        }
+        return null;
+    }
+
+    /// <summary>How many of the item's look checks found a big difference.</summary>
+    public static int BigDifferences(PackageItem item) => Read(item.ReportText).Count(c => c.Kind == CheckKind.Look && c.Level == CheckLevel.Fail);
+
+    /// <summary>Why a result whose game checks came out at <paramref name="gameVerdict"/> can't be added to a package, or null when it can:
+    /// a game check failed, so the game may not play it correctly. A look check never stops it.</summary>
+    public static string? NotForPackage(CheckLevel gameVerdict) => gameVerdict == CheckLevel.Fail ? GameCheckFailed : null;
+
+    public const string GameCheckFailed = "a game check failed, so the game may not play it correctly (see the checks marked FAIL)";
 }

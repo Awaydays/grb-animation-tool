@@ -61,6 +61,9 @@ sealed class SkeletonScene
 
     public ModelVisual3D Visual { get; } = new();
 
+    /// <summary>The skeleton the scene draws.</summary>
+    public Skeleton Skeleton => _skeleton;
+
     /// <summary>The hips' place in the last pose drawn (the character's centre, for the camera to follow).</summary>
     public NVector3 Centre { get; private set; } = new(0, 0, 0.95f);
 

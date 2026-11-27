@@ -41,6 +41,7 @@ static class InstallWork
     static Task<ClipGraph?>? _graph;
     static Task<SwapSources?>? _swaps;
     static Task<SkeletonMirror?>? _mirror;
+    static Task<ClipSets?>? _sets;
     static MarksJob? _marks;
     static CancellationTokenSource? _marksRun;
     static TaskCompletionSource<ClipIndex?>? _index;
@@ -82,6 +83,10 @@ static class InstallWork
         _graph = Read(() => readGraph(g), "while reading the game's animation graph", e => _whyNot = _whyNot with { Graph = e });
         _swaps = Read(() => SwapSources.Build(g.Clips, g.SharedTable), "while working out the swap sources", e => _whyNot = _whyNot with { Swaps = e });
         _mirror = Read(() => new SkeletonMirror(g.Skeleton), "while making the skeleton's mirror", e => _whyNot = _whyNot with { Mirror = e });
+        // the sets, from the graph when it reads (by names alone when it doesn't: every set then probable)
+        var graph = _graph;
+        // the other datafiles' clips are in a set only where their own datafiles' graphs say so, never by name
+        _sets = graph.ContinueWith(t => Read(() => ClipSets.ReadAll(g, t.Result), "while working out the sets", _ => { }), TaskScheduler.Default).Unwrap();
 
         Task<T?> Read<T>(Func<T> read, string where, Action<string> keep) where T : class => Task.Run(() =>
         {
@@ -138,6 +143,8 @@ static class InstallWork
     /// <summary>The open install's animation graph (null: it doesn't read, or <paramref name="g"/> isn't the install open).</summary>
     public static Task<ClipGraph?> Graph(GameInstall g) { lock (Lock) return IsOpen(g) ? _graph! : Task.FromResult<ClipGraph?>(null); }
     public static Task<SwapSources?> Swaps(GameInstall g) { lock (Lock) return IsOpen(g) ? _swaps! : Task.FromResult<SwapSources?>(null); }
+    /// <summary>The open install's sets (<see cref="ClipSets"/>; null: they couldn't be worked out, or <paramref name="g"/> isn't open).</summary>
+    public static Task<ClipSets?> Sets(GameInstall g) { lock (Lock) return IsOpen(g) ? _sets! : Task.FromResult<ClipSets?>(null); }
     public static Task<SkeletonMirror?> Mirror(GameInstall g) { lock (Lock) return IsOpen(g) ? _mirror! : Task.FromResult<SkeletonMirror?>(null); }
 
     /// <summary>Every clip's edit marks on the install, had once in the background: from the cache in <paramref name="cacheFolder"/> when

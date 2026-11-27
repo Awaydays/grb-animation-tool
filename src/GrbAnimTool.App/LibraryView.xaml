@@ -215,6 +215,17 @@
                     </Grid>
                     <TextBlock x:Name="InfoNote" TextWrapping="Wrap" Foreground="{DynamicResource Grb.Error}" Margin="0,6,0,0" />
 
+                    <!-- the clip's set: the clips the game switches between in one place -->
+                    <StackPanel Orientation="Horizontal" Margin="0,16,0,4">
+                        <TextBlock Text="Set" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" />
+                        <local:HelpButton x:Name="SetHelp" Heading="Set" Text="{x:Static lib:HelpTexts.Set}" />
+                        <local:HelpButton x:Name="ProbableSetHelp" Heading="Probable set" Text="{x:Static lib:HelpTexts.ProbableSet}" Visibility="Collapsed" />
+                    </StackPanel>
+                    <TextBlock x:Name="SetText" TextWrapping="Wrap" Text="-" Margin="0,0,0,4" />
+                    <Button x:Name="ShowSetButton" Content="Show the set" IsEnabled="False" HorizontalAlignment="Stretch" Margin="0,0,0,4"
+                            Click="OnShowSet" ToolTipService.ShowOnDisabled="True" Focusable="False"
+                            ToolTip="Shows only the clips of this clip's set in the list; press again to show every clip." />
+
                     <StackPanel Orientation="Horizontal" Margin="0,16,0,4">
                         <TextBlock Text="Export" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" />
                         <local:HelpButton x:Name="ExportHelp" Heading="Export" Text="{x:Static lib:HelpTexts.Export}" />

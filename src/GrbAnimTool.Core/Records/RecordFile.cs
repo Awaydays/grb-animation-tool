@@ -191,10 +191,19 @@ public static class RecordFileWriter
     /// own record of its index, name and ID (a replacement keeps its place); a file row's is named as its file is.</summary>
     public static RecordFileItem ItemOf(GameInstall install, ClipEntry c, byte[] record)
     {
-        if (!c.FromFile && (c.Index < 0 || c.Index >= install.Records.Count || install.Records[c.Index].Index != c.Index || install.Records[c.Index].Id != c.Id || install.Records[c.Index].Name != c.Name))
+        // a row of the animation datafile is checked against the install's records; another datafile's row was read from that datafile
+        // itself, its index its place there
+        if (!c.FromFile && c.InAnimationDatafile && (c.Index < 0 || c.Index >= install.Records.Count || install.Records[c.Index].Index != c.Index || install.Records[c.Index].Id != c.Id || install.Records[c.Index].Name != c.Name))
             throw new RecordFileException($"{c.Name} 0x{c.Id:X16} isn't record {c.Index} of the game folder's animation datafile");
+        if (!c.FromFile && !c.InAnimationDatafile && (c.Index < 0 || c.Id == 0))
+            throw new RecordFileException($"{c.Name} 0x{c.Id:X16} has no place in a datafile of the game folder");
         return new RecordFileItem(FileIndexOf(c), c.Name, c.Id, record);
     }
+
+    /// <summary>The folder a row's record file goes into once the player has unpacked its datafile: the animation datafile's, or the
+    /// other datafile's own (<c>index_-_name.data</c>).</summary>
+    public static string FolderOf(GameInstall install, ClipEntry c) =>
+        c.InAnimationDatafile || c.DatafileName.Length == 0 ? install.RecordFolderName : RecordFile.DatafileFolderName(c.DatafileIndex, c.DatafileName);
 
     /// <summary>Writes plain files (no record file) into <paramref name="folder"/> (made when missing) under the same
     /// guard and the same whole-or-nothing write as a package: a check report kept in a folder apart from the record files, say.</summary>

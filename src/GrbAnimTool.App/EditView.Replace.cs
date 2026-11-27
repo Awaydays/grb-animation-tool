@@ -41,7 +41,9 @@ public partial class EditView
     /// <summary>The fit as the controls give it, or null when a number box doesn't hold a number it takes.</summary>
     FitOptions? FitOptionsNow()
     {
-        if (!int.TryParse(CutStartBox.Text.Trim(), out int start) || start < 0) return null;
+        // in set mode each clip has its own start (the single box hidden): the single box isn't read
+        int start = 0;
+        if (!SetTicked && (!int.TryParse(CutStartBox.Text.Trim(), out start) || start < 0)) return null;
         if (!int.TryParse(LoopFramesBox.Text.Trim(), out int frames) || frames < 1) return null;
         if (!ClipQuery.TryParseSeconds(RootScaleBox.Text, out var root) || root is null) return null;
         var mode = StretchChoice.IsChecked == true ? FitMode.Speed : HoldChoice.IsChecked == true ? FitMode.Hold : FitMode.Cut;
@@ -52,6 +54,7 @@ public partial class EditView
     /// the lengths differ, the cut's start only for a cut.</summary>
     void ShowReplace()
     {
+        RefillReplaceListIfTargetsChanged();
         bool can = !_busy && _clip?.Record is not null;
         ReplaceChoice.IsEnabled = can;
         if (!can && !_busy && ReplaceChoice.IsChecked == true) ReplaceChoice.IsChecked = false;
@@ -59,7 +62,9 @@ public partial class EditView
         FromClipPanel.Visibility = fromClip ? Visibility.Visible : Visibility.Collapsed;
         FromGlbPanel.Visibility = fromClip ? Visibility.Collapsed : Visibility.Visible;
         int? slot = _clip?.Record?.LastTick;
-        bool differs = slot is int s && _replaceTicks is int t && s != t;
+        // for a set, with one source: the fit when any clip ticked differs from it; with a source per clip, always
+        bool differs = SetChosen ? PerClip || _replaceTicks is int st && _setRows.Any(r => r.Ticked && r.Clip.LastTick != st)
+            : slot is int s && _replaceTicks is int t && s != t;
         FitPanel.Visibility = differs ? Visibility.Visible : Visibility.Collapsed;
         CutPanel.Visibility = CutChoice.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         ReplaceSourceText.Text = _replaceTicks is not int ticks || slot is not int last ? ""
@@ -69,13 +74,15 @@ public partial class EditView
         // the timing data's help beside a trim or speed refused for it
         bool timing = _options.Any(o => o.Kind is EditKind.Trim or EditKind.Speed && o.Refusal is Core.Edits.EditRefusal.TimesUnread);
         TimingHelp.Visibility = timing && !_busy ? Visibility.Visible : Visibility.Collapsed;
-        // a new clip with a longer source chosen: its cut suggested (once per pair)
-        if (differs && ReplaceChosen) SuggestSoon();
+        // a new clip with a longer source chosen: its cut suggested (once per pair); a set's cuts are suggested per clip when it is made
+        if (differs && ReplaceChosen && !SetChosen) SuggestSoon();
+        ShowEditSet();
     }
 
     void OnReplaceChanged(object sender, RoutedEventArgs e)
     {
         if (!_built) return;
+        DropSetResults();
         if (sender != FromClipChoice && sender != FromGlbChoice && ReplaceChoice.IsEnabled) ReplaceChoice.IsChecked = true;
         ShowReplace();
         UpdateButtons();
@@ -84,20 +91,71 @@ public partial class EditView
     void OnReplaceNumbers(object sender, TextChangedEventArgs e)
     {
         if (!_built) return;
+        // the cut's start is the single Replace's (its suggestion may land later); a set suggests its own per clip
+        if (sender != CutStartBox) DropSetResults();
         UpdateButtons();
     }
 
-    void OnReplaceSearch(object sender, TextChangedEventArgs e)
+    /// <summary>A row of Replace's source list: a game clip, and why the clips Replace is for can't take its motion (null: they can).</summary>
+    public sealed record SourceRow(ClipEntry Clip, string? Refusal)
+    {
+        public string Name => Clip.Name;
+        public float Duration => Clip.Duration;
+        public bool Takes => Refusal is null;
+        public string Note => Refusal is null ? Clip.StatusText : Refusal;
+    }
+
+    /// <summary>The clips Replace's source is for, and the list they were last worked out for.</summary>
+    IReadOnlyList<ClipEntry> ReplaceTargets() =>
+        SetChosen ? (PerClip && SetClipList.SelectedItem is SetRow { } row ? [row.Clip] : _setRows.Where(r => r.Ticked).Select(r => r.Clip).ToList())
+        : _clip is { } c ? [c] : [];
+    IReadOnlyList<ClipEntry>? _sourcesFor;
+
+    void OnReplaceSearch(object sender, TextChangedEventArgs e) => FillReplaceList();
+
+    void OnShowEveryClip(object sender, RoutedEventArgs e) => FillReplaceList();
+
+    /// <summary>The source list again when the clips it is for changed (another clip shown, the set's ticks or row).</summary>
+    void RefillReplaceListIfTargetsChanged()
+    {
+        if (_sourcesFor is null || !_sourcesFor.SequenceEqual(ReplaceTargets())) FillReplaceList();
+    }
+
+    bool _fillingSources;
+
+    /// <summary>Replace's source list: the search's best matches first, as the Library's search ranks them (a few hundred are enough to
+    /// pick from), only the clips every clip Replace is for can take (on its skeleton, or on one whose bones map onto it); with Show every
+    /// clip the others too, greyed, each with why. The source chosen stays selected.</summary>
+    void FillReplaceList()
     {
         if (_install is not { } g) { ReplaceList.ItemsSource = null; return; }
-        // the best matches first, as the Library's search ranks them; a few hundred are enough to pick from
-        ReplaceList.ItemsSource = new ClipQuery { Text = ReplaceSearch.Text }.Apply(g.Clips, ClipSort.Relevance).Take(400).ToList();
+        var targets = ReplaceTargets();
+        _sourcesFor = targets;
+        // whether the targets take a source depends on its skeleton alone: worked out once a skeleton
+        // shortcut: a skeleton's first look reads its record on the window's thread (once an install, a few ms); move off it if that shows
+        var takes = new Dictionary<Core.Skeletons.ClipSkeleton, bool>();
+        bool Takes(ClipEntry s) => takes.TryGetValue(s.OnSkeleton, out var t) ? t : takes[s.OnSkeleton] = targets.All(x => g.ReplaceProblem(x, s) is null);
+        var found = new ClipQuery { Text = ReplaceSearch.Text }.Apply(g.AllClips, ClipSort.Relevance);
+        var rows = (ShowEveryClipBox.IsChecked == true ? found : found.Where(Takes)).Take(400)
+            .Select(s => new SourceRow(s, Takes(s) ? null : targets.Select(x => g.ReplaceProblem(x, s)).First(p => p is not null))).ToList();
+        _fillingSources = true;
+        ReplaceList.ItemsSource = rows;
+        ReplaceList.SelectedItem = rows.FirstOrDefault(r => r.Takes && r.Clip == _replaceSource);
+        _fillingSources = false;
     }
+
+    /// <summary>The source list's rows (for tests).</summary>
+    internal IReadOnlyList<SourceRow> SourceRows => ReplaceList.ItemsSource as IReadOnlyList<SourceRow> ?? [];
+
+    /// <summary>Chooses the source list's row of the clip named <paramref name="name"/> as a click would (for tests).</summary>
+    internal void ChooseSource(string name) => ReplaceList.SelectedItem = SourceRows.First(r => r.Name == name);
 
     void OnReplaceSourceChosen(object sender, SelectionChangedEventArgs e)
     {
-        if (ReplaceList.SelectedItem is not ClipEntry src) return;
+        if (_fillingSources || ReplaceList.SelectedItem is not SourceRow { Takes: true, Clip: var src }) return;
         _replaceSource = src;
+        DropSetResults();
+        TakeSetSource(SetSource.Of(src));
         if (ReplaceChoice.IsEnabled) ReplaceChoice.IsChecked = true;
         SuggestSoon();
         ShowReplace();
@@ -128,6 +186,8 @@ public partial class EditView
             if (ticks is not double t) { ReplaceGlbText.Text = $"{Path.GetFileName(path)}: no animation in it"; return; }
             _replaceGlb = path;
             _glbTicks = (int)Math.Round(t);
+            DropSetResults();
+            TakeSetSource(SetSource.OfGlb(path));
             // the .glb chosen: the source is the file from now on
             FromGlbChoice.IsChecked = true;
             ReplaceGlbText.Text = Path.GetFileName(path);
@@ -165,8 +225,10 @@ public partial class EditView
         {
             int? start = await Task.Run(() =>
             {
-                Motion m = src is not null ? Motion.FromClip(g.Skeleton, src.Record!, g.SharedTable)
-                    : ClipImport.Run(g.Skeleton, g.SharedTable, slot, File.ReadAllBytes(glb!), glb!, fit: new FitOptions { Mode = FitMode.Hold }).Unfitted!;
+                if (g.ReplaceProblem(slot, src) is { } why) throw new ImportRefusedException(why, ImportRefusal.File);
+                var sk = g.SkeletonOf(slot)!;
+                Motion m = src is not null ? Motion.FromClip(sk, src.Record!, g.SharedTable)
+                    : ClipImport.Run(sk, g.SharedTable, slot, File.ReadAllBytes(glb!), glb!, fit: new FitOptions { Mode = FitMode.Hold }).Unfitted!;
                 return ClipFit.SuggestCut(m, last);
             });
             // the clip and the source still the ones it was worked out for
@@ -199,6 +261,8 @@ public partial class EditView
         var verdict = _ctx?.Verdict;
         int id = ++_runId;
         _outcome = null;
+        _setOutcomes = null;
+        SetResultText.Text = "";
         HideError();
         StatusText.Text = "";
         string what = src is not null ? $"motion from {src.Name}" : Path.GetFileName(glb!);
@@ -212,12 +276,15 @@ public partial class EditView
         {
             (o, marks, map) = await Task.Run(() =>
             {
-                var r = src is not null ? ClipReplace.FromClip(g.Skeleton, g.SharedTable, c, src, fit, verdict, verdict is not null)
-                    : ClipImport.Run(g.Skeleton, g.SharedTable, c, File.ReadAllBytes(glb!), Path.GetFullPath(glb!), verdict, verdict is not null, fit);
+                // the clip's own skeleton, and a source on it (or on one whose bones map onto it)
+                if (g.ReplaceProblem(c, src) is { } why) throw new ImportRefusedException(why, src is null ? ImportRefusal.Slot : ImportRefusal.File);
+                var sk = g.SkeletonOf(c)!;
+                var r = src is not null ? ClipReplace.FromClip(sk, g.SharedTable, c, src, fit, verdict, verdict is not null)
+                    : ClipImport.Run(sk, g.SharedTable, c, File.ReadAllBytes(glb!), Path.GetFullPath(glb!), verdict, verdict is not null, fit);
                 int srcTicks = r.Unfitted?.LastTick ?? c.LastTick;
                 string words = fit.Words(srcTicks, c.LastTick) is { Length: > 0 } fw ? $"{what}, {fw}" : what;
                 var made = EditOutcome.OfReplace(r, src, ClipChange.Replaced(words));
-                return (made, Marks(made.Result.Record, g), TrackMapLine(ClipReplace.TrackMap(r, g.Skeleton)));
+                return (made, Marks(made.Result.Record, g), TrackMapLine(ClipReplace.TrackMap(r, sk)));
             });
         }
         catch (ImportRefusedException ex) { error = "Not made. " + ex.Message; }

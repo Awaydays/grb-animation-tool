@@ -342,6 +342,9 @@ public sealed class UnitTests
     {
         var t = VanillaClipHashes.Embedded();
         Assert.NotNull(t);
-        Assert.Equal(9_938, t!.Count);
+        // every datafile's clips: 9,938 in the animation datafile, 11,439 more in the others
+        Assert.Equal(21_377, t!.Count);
+        // the skeletons of the clips not on the body, by ID
+        Assert.Equal(426, Core.Skeletons.ClipSkeletons.Table.Count);
     }
 }

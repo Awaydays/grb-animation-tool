@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
+using GrbAnimTool.Core.Library;
 
 namespace GrbAnimTool.App;
 
@@ -35,9 +36,8 @@ sealed class ErrorReport
     public int Count => _count;
     int _count;
 
-    /// <summary>The program's own log in the user's folder: <c>%APPDATA%\GrbAnimTool\errors.log</c>.</summary>
-    public static string DefaultLogPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GrbAnimTool", "errors.log");
+    /// <summary>The program's own log in the user's folder: <c>%APPDATA%\GrbAnimTool\errors.log</c> (<see cref="ToolData"/>).</summary>
+    public static string DefaultLogPath => Path.Combine(ToolData.Folder, "errors.log");
 
     /// <summary>Starts catching what reaches <paramref name="dispatcher"/> (the window's thread), the unobserved tasks and the other threads.</summary>
     public void Install(Dispatcher dispatcher)
